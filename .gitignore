@@ -1,0 +1,35 @@
+# Virtual Environments
+venv/
+.venv/
+backend/venv/
+backend/.venv/
+env/
+.env/
+
+# Python cache & bytecode
+__pycache__/
+*/__pycache__/
+*/*/__pycache__/
+*.py[cod]
+*$py.class
+
+# Databases
+*.db
+*.sqlite3
+backend/*.db
+
+# Environment variables & secrets
+.env
+backend/.env
+*.env
+
+# Testing & tool caches
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# IDE files
+.idea/
+.DS_Store

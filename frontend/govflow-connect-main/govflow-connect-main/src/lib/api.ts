@@ -133,11 +133,199 @@ export interface MeshApplication {
   service_name?: string | null;
   service_code?: string | null;
   department_name?: string | null;
+  assigned_officer_id?: number | null;
+  assigned_officer_name?: string | null;
+  current_workflow_step?: {
+    step_id: string;
+    name: string;
+    department?: string | null;
+    type: string;
+    status: string;
+  } | null;
+  sla_due_at?: string | null;
   created_at: string;
   updated_at: string;
   document_count: number;
   form_data?: Record<string, string>;
-  workflow?: Array<{ key: string; label: string; status: string; detail: string; attempts: number }>;
+  workflow?: Array<{
+    key: string;
+    label: string;
+    status: string;
+    detail: string;
+    attempts: number;
+    step_id?: string;
+    department?: string | null;
+    type?: string;
+    order?: number;
+    required?: boolean;
+    action?: Record<string, unknown>;
+    next_steps?: string[];
+  }
+
+  export interface GovernmentDashboard {
+    department_name: string | null;
+    counts: {
+      pending_applications: number;
+      assigned_to_me: number;
+      sla_at_risk: number;
+      interdepartmental_requests: number;
+      data_verification_requests: number;
+      open_exceptions: number;
+      completed_today: number;
+    };
+    application_queue: Array<{
+      id: number;
+      reference_id: string;
+      citizen_name: string;
+      service_name: string;
+      status: string;
+      current_step: { name: string; type: string } | null;
+      sla_due_at: string | null;
+      assigned_officer_id: number | null;
+      assigned_officer_name: string | null;
+    }>;
+    recent_requests: Array<{
+      transaction_id: string;
+      application_id: number;
+      reference_id: string;
+      service_name: string;
+      source_department: string;
+      requesting_department: string;
+      data_requested: string;
+      status: string;
+      requested_at: string;
+    }>;
+    generated_at: string;
+  }
+
+  export interface ApplicationWorkspace {
+    application: MeshApplication;
+    citizen: {
+      id: number;
+      full_name: string;
+      email: string;
+      phone: string | null;
+      aadhaar_last4: string | null;
+    };
+    application_information: {
+      id: number;
+      reference_id: string;
+      status: string;
+      service_id: number;
+      service_name: string | null;
+      department_name: string | null;
+      submitted_at: string | null;
+      form_data: Record<string, unknown>;
+      sla_due_at: string | null;
+      assigned_officer_id: number | null;
+      assigned_officer_name: string | null;
+    };
+    verified_records: Array<{
+      id: string;
+      record_type: string;
+      status: string;
+      department: string | null;
+      source_record_id: string;
+      verified_at: string | null;
+      values: Record<string, string>;
+    }>;
+    documents: Array<{
+      id: number;
+      title: string;
+      doc_type: string;
+      is_verified: boolean;
+      verification_score: number | null;
+      fraud_risk_level: string | null;
+      created_at: string | null;
+    }>;
+    consents: Array<{
+      id: number;
+      purpose: string;
+      requested_data: string;
+      status: string;
+      source_department: string | null;
+      granted_at: string | null;
+      expires_at: string | null;
+      revoked_at: string | null;
+    }>;
+    transactions: Array<{
+      transaction_id: string;
+      status: string;
+      source_department: string;
+      requesting_department: string;
+      data_requested: string;
+      requested_at: string | null;
+      completed_at: string | null;
+      error_message: string | null;
+    }>;
+    transaction_events: Array<{
+      id: string;
+      transaction_id: number;
+      event_type: string;
+      status: string;
+      detail: string | null;
+      error_code: string | null;
+      error_message: string | null;
+      occurred_at: string | null;
+    }>;
+    workflow: NonNullable<MeshApplication["workflow"]>;
+    exceptions: Array<{
+      id: number;
+      system: string;
+      category: string;
+      message: string;
+      severity: string;
+      status: string;
+      details: Record<string, unknown> | null;
+      created_at: string | null;
+    }>;
+    audit_events: Array<{
+      id: string | number;
+      action: string;
+      entity_type: string;
+      details: string | null;
+      actor_id: number | null;
+      created_at: string | null;
+    }>;
+  }>;
+}
+
+export interface WorkflowDefinition {
+  workflow_id: number;
+  service_id: number;
+  application_id: number | null;
+  name: string;
+  version: number;
+  status: string;
+  steps: Array<{
+    step_id: string;
+    name: string;
+    department: string | null;
+    type:
+      | "DATA_REQUEST"
+      | "CONSENT"
+      | "DOCUMENT_UPLOAD"
+      | "DOCUMENT_VERIFICATION"
+      | "DATA_VALIDATION"
+      | "OFFICER_REVIEW"
+      | "APPROVAL"
+      | "REJECTION"
+      | "NOTIFICATION"
+      | "COMPLETION";
+    order: number;
+    required: boolean;
+    action: Record<string, unknown>;
+    next_steps: string[];
+    status: string;
+    attempts: number;
+    detail: string | null;
+  }>;
+  required_records: string[];
+  required_consents: string[];
+  departments: string[];
+  transitions: Record<string, string[]>;
+  sla_hours: number | null;
+  sla_due_at: string | null;
 }
 
 export interface MeshDocument {
@@ -163,12 +351,22 @@ export interface MeshConsent {
   citizen_id: number;
   citizen_name?: string | null;
   citizen_aadhaar_last4?: string | null;
+  requested_data: string;
+  data_items: Array<{
+    id: number;
+    data_key: string;
+    description: string;
+    classification?: string | null;
+  }>;
   created_at: string;
+  granted_at?: string | null;
   expires_at?: string | null;
+  revoked_at?: string | null;
 }
 
 export interface InteroperabilityResult {
   status: string;
+  transactionStatus: string;
   message: string;
   transactionId: string;
   data?: Record<string, unknown>;
@@ -325,6 +523,14 @@ export const api = {
     return res.data;
   },
 
+  async getGovernmentDashboard(): Promise<GovernmentDashboard> {
+    const res = await request<GovernmentDashboard>("/stats/government-dashboard");
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Government dashboard data is unavailable.");
+    }
+    return res.data;
+  },
+
   // Auth
   async login(email: string, password: string): Promise<AuthResponse> {
     clearStoredToken();
@@ -392,15 +598,41 @@ export const api = {
     search?: string;
     citizen_id?: number;
     limit?: number;
+    assigned_to_me?: boolean;
   }): Promise<MeshApplication[]> {
     const query = new URLSearchParams();
     if (params?.status) query.append("status", params.status);
     if (params?.search) query.append("search", params.search);
     if (params?.citizen_id) query.append("citizen_id", String(params.citizen_id));
     if (params?.limit) query.append("limit", String(params.limit));
+    if (params?.assigned_to_me) query.append("assigned_to_me", "true");
 
     const res = await request<MeshApplication[]>(`/applications?${query.toString()}`);
-    return res.data || [];
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Applications could not be loaded.");
+    }
+    return res.data;
+  },
+
+  async getApplicationWorkspace(id: number | string): Promise<ApplicationWorkspace> {
+    if (!/^\d+$/.test(String(id))) {
+      throw new Error("An application database ID is required to load its workspace.");
+    }
+    const res = await request<ApplicationWorkspace>(`/applications/${id}/workspace`);
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Application workspace could not be loaded.");
+    }
+    return res.data;
+  },
+
+  async assignApplicationToMe(id: number): Promise<MeshApplication> {
+    const res = await request<MeshApplication>(`/applications/${id}/assign-to-me`, {
+      method: "POST",
+    });
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Application could not be assigned.");
+    }
+    return res.data;
   },
 
   async getApplication(id: number | string): Promise<MeshApplication | null> {
@@ -449,6 +681,13 @@ export const api = {
     return res.data || [];
   },
 
+  async getWorkflowDefinitions(serviceId?: number): Promise<WorkflowDefinition[]> {
+    const query = serviceId === undefined ? "" : `?service_id=${serviceId}`;
+    const res = await request<WorkflowDefinition[]>(`/workflows${query}`);
+    if (res.error) throw new Error(res.error);
+    return res.data || [];
+  },
+
   async getDocuments(ownerId: number): Promise<MeshDocument[]> {
     const res = await request<MeshDocument[]>(`/documents?owner_id=${ownerId}`);
     if (res.error) throw new Error(res.error);
@@ -460,7 +699,8 @@ export const api = {
     stageKey: string,
     status: string,
     detail?: string,
-    error?: string
+    error?: string,
+    nextStep?: string
   ): Promise<MeshApplication["workflow"]> {
     const res = await request<MeshApplication["workflow"]>(`/applications/${id}/workflow`, {
       method: "PATCH",
@@ -470,6 +710,7 @@ export const api = {
         detail,
         completed_at: status === "completed" ? new Date().toISOString() : undefined,
         error,
+        next_step: nextStep,
       }),
     });
     if (res.error) throw new Error(res.error);
@@ -555,12 +796,28 @@ export const api = {
     source_platform_id: number;
     target_platform_id: number;
     citizen_id: number;
-    expires_at?: string;
-    status: "pending" | "granted" | "denied";
+    requested_data: string;
+    requested_fields: string[];
   }): Promise<MeshConsent> {
     const res = await request<MeshConsent>("/consents", {
       method: "POST",
       body: JSON.stringify(data),
+    });
+    if (res.error) throw new Error(res.error);
+    return res.data!;
+  },
+
+  async approveConsent(id: number): Promise<MeshConsent> {
+    const res = await request<MeshConsent>(`/consents/${id}/approve`, {
+      method: "POST",
+    });
+    if (res.error) throw new Error(res.error);
+    return res.data!;
+  },
+
+  async rejectConsent(id: number): Promise<MeshConsent> {
+    const res = await request<MeshConsent>(`/consents/${id}/reject`, {
+      method: "POST",
     });
     if (res.error) throw new Error(res.error);
     return res.data!;

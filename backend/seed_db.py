@@ -294,6 +294,7 @@ def seed_database(force: bool = False):
 
         c_objects = []
         for purp, c_st, src_id, tgt_id, cit_id, days in consents_data:
+            now = datetime.now(timezone.utc)
             c_objects.append(
                 DataShareConsent(
                     purpose=purp,
@@ -308,7 +309,9 @@ def seed_database(force: bool = False):
                         DigitalPlatform.id == tgt_id
                     ).one().department_id,
                     requested_data=purp,
-                    expires_at=datetime.now(timezone.utc) + timedelta(days=days),
+                    granted_at=now if c_st == ConsentStatus.GRANTED else None,
+                    revoked_at=now if c_st == ConsentStatus.REVOKED else None,
+                    expires_at=now + timedelta(days=days),
                 )
             )
 

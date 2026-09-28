@@ -1,9 +1,11 @@
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.api.deps import get_user_role_key, require_role
@@ -12,9 +14,12 @@ from app.models.audit import AuditLog
 from app.models.consent import ConsentStatus, DataShareConsent
 from app.models.department import Department
 from app.models.document import Document
+from app.models.interoperability_exception import ExceptionStatus, InteroperabilityException
 from app.models.platform import DigitalPlatform, PlatformStatus
 from app.models.service import Service
 from app.models.user import User
+from app.models.transaction import InteroperabilityTransaction
+from app.models.workflow import Workflow, WorkflowStep
 
 router = APIRouter(prefix="/stats", tags=["Mesh Statistics & Analytics"])
 
@@ -34,6 +39,185 @@ class DashboardStatsResponse(BaseModel):
     fraud_anomalies_detected: int
     system_status: str
     timestamp: float
+
+
+@router.get("/government-dashboard")
+def get_government_dashboard(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[
+        User,
+        Depends(
+            require_role(
+                "department_officer", "interoperability_admin", "system_admin"
+            )
+        ),
+    ],
+):
+    role_key = get_user_role_key(current_user)
+    department_id = (
+        current_user.department_id if role_key == "department_officer" else None
+    )
+    if role_key == "department_officer" and department_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Department officers must be assigned to a department.",
+        )
+
+    now = datetime.now(timezone.utc)
+    pending_statuses = (
+        ApplicationStatus.SUBMITTED,
+        ApplicationStatus.UNDER_REVIEW,
+    )
+    completed_statuses = (
+        ApplicationStatus.APPROVED,
+        ApplicationStatus.REJECTED,
+    )
+    applications = db.query(ServiceApplication)
+    if department_id is not None:
+        applications = applications.filter(
+            ServiceApplication.department_id == department_id
+        )
+    pending = applications.filter(ServiceApplication.status.in_(pending_statuses))
+    assigned = pending.filter(
+        ServiceApplication.assigned_officer_id == current_user.id
+    )
+    due_soon = (
+        db.query(func.count(func.distinct(ServiceApplication.id)))
+        .join(Workflow, Workflow.application_id == ServiceApplication.id)
+        .filter(
+            ServiceApplication.status.in_(pending_statuses),
+            Workflow.sla_due_at.is_not(None),
+            Workflow.sla_due_at <= now + timedelta(hours=24),
+        )
+    )
+    if department_id is not None:
+        due_soon = due_soon.filter(
+            ServiceApplication.department_id == department_id
+        )
+    request_query = db.query(InteroperabilityTransaction).filter(
+        InteroperabilityTransaction.requesting_department
+        != InteroperabilityTransaction.source_department,
+        InteroperabilityTransaction.status.notin_(
+            ("COMPLETED", "FAILED", "CONFLICT", "completed", "failed", "conflict")
+        ),
+    )
+    verification_query = (
+        db.query(WorkflowStep)
+        .join(Workflow, WorkflowStep.workflow_id == Workflow.id)
+        .join(ServiceApplication, Workflow.application_id == ServiceApplication.id)
+        .filter(
+            WorkflowStep.step_type == "DATA_REQUEST",
+            WorkflowStep.status.in_(("pending", "in_progress")),
+            ServiceApplication.status.in_(pending_statuses),
+        )
+    )
+    exception_query = db.query(InteroperabilityException).filter(
+        InteroperabilityException.status != ExceptionStatus.RESOLVED
+    )
+    if department_id is not None:
+        request_query = request_query.join(
+            ServiceApplication,
+            InteroperabilityTransaction.application_id == ServiceApplication.id,
+        ).filter(ServiceApplication.department_id == department_id)
+        verification_query = verification_query.filter(
+            ServiceApplication.department_id == department_id
+        )
+        exception_query = exception_query.filter(
+            InteroperabilityException.service_application_id.in_(
+                db.query(ServiceApplication.id).filter(
+                    ServiceApplication.department_id == department_id
+                )
+            )
+        )
+
+    queue = (
+        pending.options(
+            joinedload(ServiceApplication.citizen),
+            joinedload(ServiceApplication.service),
+            joinedload(ServiceApplication.workflow_run).joinedload(Workflow.steps),
+            joinedload(ServiceApplication.assigned_officer),
+        )
+        .order_by(ServiceApplication.created_at.asc())
+        .limit(12)
+        .all()
+    )
+    transactions = (
+        request_query.options(
+            joinedload(InteroperabilityTransaction.application).joinedload(
+                ServiceApplication.service
+            )
+        )
+        .order_by(InteroperabilityTransaction.requested_at.desc())
+        .limit(8)
+        .all()
+    )
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    completed_today = applications.filter(
+        ServiceApplication.status.in_(completed_statuses),
+        ServiceApplication.updated_at >= today,
+    ).count()
+
+    return {
+        "department_name": (
+            current_user.department_record.name
+            if department_id is not None and current_user.department_record
+            else None
+        ),
+        "counts": {
+            "pending_applications": pending.count(),
+            "assigned_to_me": assigned.count(),
+            "sla_at_risk": due_soon.scalar() or 0,
+            "interdepartmental_requests": request_query.count(),
+            "data_verification_requests": verification_query.count(),
+            "open_exceptions": exception_query.count(),
+            "completed_today": completed_today,
+        },
+        "application_queue": [
+            {
+                "id": application.id,
+                "reference_id": application.reference_id,
+                "citizen_name": application.citizen.full_name,
+                "service_name": application.service.name,
+                "status": application.status.value,
+                "current_step": (
+                    {
+                        "name": application.current_workflow_step["name"],
+                        "type": application.current_workflow_step["type"],
+                    }
+                    if application.current_workflow_step
+                    else None
+                ),
+                "sla_due_at": (
+                    application.workflow_run.sla_due_at.isoformat()
+                    if application.workflow_run
+                    and application.workflow_run.sla_due_at
+                    else None
+                ),
+                "assigned_officer_id": application.assigned_officer_id,
+                "assigned_officer_name": (
+                    application.assigned_officer.full_name
+                    if application.assigned_officer
+                    else None
+                ),
+            }
+            for application in queue
+        ],
+        "recent_requests": [
+            {
+                "transaction_id": transaction.transaction_id,
+                "application_id": transaction.application_id,
+                "reference_id": transaction.application.reference_id,
+                "service_name": transaction.application.service.name,
+                "source_department": transaction.source_department,
+                "requesting_department": transaction.requesting_department,
+                "data_requested": transaction.data_requested,
+                "status": transaction.status,
+                "requested_at": transaction.requested_at.isoformat(),
+            }
+            for transaction in transactions
+        ],
+        "generated_at": now.isoformat(),
+    }
 
 
 @router.get("/dashboard", response_model=DashboardStatsResponse)

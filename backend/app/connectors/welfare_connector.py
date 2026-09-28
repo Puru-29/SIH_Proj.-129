@@ -13,6 +13,7 @@ class WelfareConnector(BaseConnector):
         return {
             "citizen_id": str(citizen_id),
             "record_type": record_type,
+            "eligibility_id": f"WEL-{citizen_id}-{record_type.casefold().replace(' ', '-')}",
             "eligibility_status": "ELIGIBLE",
             "purpose": purpose or "Scholarship eligibility",
         }

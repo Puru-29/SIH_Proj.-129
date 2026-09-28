@@ -14,6 +14,7 @@ from app.api.v1.stats import router as stats_router
 from app.api.v1.documents import router as documents_router
 from app.api.v1.ml import router as ml_router
 from app.api.v1.interoperability import router as interoperability_router
+from app.api.v1.workflows import router as workflows_router
 
 api_v1_router = APIRouter()
 api_v1_router.include_router(auth_router)
@@ -27,6 +28,7 @@ api_v1_router.include_router(stats_router)
 api_v1_router.include_router(documents_router)
 api_v1_router.include_router(ml_router)
 api_v1_router.include_router(interoperability_router)
+api_v1_router.include_router(workflows_router)
 
 
 @api_v1_router.get("/system/health", tags=["System"])

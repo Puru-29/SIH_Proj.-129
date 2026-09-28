@@ -9,6 +9,7 @@ from app.api.deps import ensure_resource_access, get_user_role_key, require_role
 from app.database import get_db
 from app.models.application import ServiceApplication
 from app.models.interoperability_exception import ExceptionStatus, InteroperabilityException
+from app.services.interoperability.mapping_service import MappingService
 from app.models.transaction import InteroperabilityTransaction
 from app.models.user import User
 from app.api.deps import require_authenticated_user
@@ -34,6 +35,9 @@ class InteroperabilityRequest(BaseModel):
 class TestMappingRequest(BaseModel):
     source_system: str = "REVENUE"
     sample_data: dict[str, Any]
+
+
+mapping_service = MappingService()
 
 
 @router.get("/integrations", response_model=list[dict])
@@ -92,6 +96,7 @@ def request_interoperability(
             source_department=payload.source_department,
             data_requested=payload.data_requested,
             purpose=payload.purpose,
+            authenticated_user=current_user,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -118,6 +123,94 @@ def test_mapping(
         "sourceSystem": payload.source_system,
     }
     return {"normalized": normalized, "status": "mapped", "confidence": 96}
+
+
+@router.get("/data-mapping", response_model=list[dict])
+@router.get("/interoperability/mappings", response_model=list[dict])
+def list_mapping_configurations(
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[
+        User,
+        Depends(
+            require_role(
+                "department_officer", "interoperability_admin", "system_admin"
+            )
+        ),
+    ],
+):
+    """Inspect persisted source-to-GovFlow mapping configurations."""
+    mappings = mapping_service.list_mappings(db)
+    return [
+        {
+            "id": mapping.id,
+            "name": mapping.name,
+            "source": mapping.source,
+            "target": mapping.target,
+            "sourceSystemId": mapping.source_system_id,
+            "sourceSystem": mapping.source_system.name if mapping.source_system else None,
+            "targetSystemId": mapping.target_system_id,
+            "targetSystem": mapping.target_system.name if mapping.target_system else None,
+            "sourceSchemaVersion": mapping.source_schema_version,
+            "targetSchemaVersion": mapping.target_schema_version,
+            "version": mapping.version,
+            "status": mapping.status,
+            "rules": [
+                {
+                    "sourceField": rule.source_field,
+                    "targetField": rule.target_field,
+                    "transformation": rule.transformation,
+                    "required": rule.is_required,
+                }
+                for rule in mapping.rules
+            ],
+        }
+        for mapping in mappings
+    ]
+
+
+@router.get("/interoperability/conflicts", response_model=list[dict])
+def list_mapping_conflicts(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[
+        User,
+        Depends(
+            require_role(
+                "department_officer", "interoperability_admin", "system_admin"
+            )
+        ),
+    ],
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Inspect persisted data conflicts and the values returned by each source."""
+    query = db.query(InteroperabilityException).filter(
+        InteroperabilityException.category == "DATA_CONFLICT"
+    )
+    if get_user_role_key(current_user) == "department_officer":
+        if current_user.department_id is None:
+            return []
+        query = query.join(
+            ServiceApplication,
+            ServiceApplication.id == InteroperabilityException.service_application_id,
+        ).filter(ServiceApplication.department_id == current_user.department_id)
+    conflicts = (
+        query.order_by(InteroperabilityException.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": conflict.id,
+            "applicationId": conflict.application_id,
+            "transactionId": conflict.transaction_id,
+            "fieldNames": (conflict.details or {}).get("fields", []),
+            "conflictingValues": (conflict.details or {}).get("conflictingValues", {}),
+            "message": conflict.message,
+            "severity": conflict.severity,
+            "status": conflict.status.value,
+            "createdAt": conflict.created_at.isoformat(),
+        }
+        for conflict in conflicts
+    ]
 
 
 @router.get("/interoperability/transactions", response_model=list[dict])
@@ -201,12 +294,22 @@ def _transaction_payload(row: InteroperabilityTransaction) -> dict[str, Any]:
         "response": row.response_status,
         "audit": "RECORDED",
         "result": row.response_status,
-        "status": row.response_status,
+        "status": row.status,
+        "transactionStatus": row.status,
         "applicationId": row.application_id,
         "consentId": row.consent_id,
         "timestamp": created_at,
         "createdAt": created_at,
         "completedAt": completed_at,
+        "events": [
+            {
+                "state": event.status,
+                "type": event.event_type,
+                "detail": event.detail,
+                "occurredAt": event.occurred_at.isoformat() if event.occurred_at else None,
+            }
+            for event in sorted(row.events, key=lambda item: item.occurred_at or row.created_at)
+        ],
     }
 
 

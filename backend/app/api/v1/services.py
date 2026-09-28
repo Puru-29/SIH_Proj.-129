@@ -9,6 +9,7 @@ from app.models.service import Service
 from app.models.user import User
 from app.schemas.service import ServiceCreate, ServiceRead
 from app.services.service_config import SERVICE_NAMES, get_service_config
+from app.services.workflow_engine import workflow_engine
 
 router = APIRouter(prefix="/services", tags=["Government Services"])
 
@@ -46,7 +47,11 @@ def get_service_form_schema(service_id: int, db: Annotated[Session, Depends(get_
     svc = db.query(Service).filter(Service.id == service_id, Service.is_active.is_(True)).first()
     if not svc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
-    return get_service_config(svc)
+    config = get_service_config(svc)
+    definition = workflow_engine.ensure_definition(db, svc)
+    if definition is not None:
+        config["workflow"] = [step.name for step in definition.steps]
+    return config
 
 
 @router.post("", response_model=ServiceRead, status_code=status.HTTP_201_CREATED)

@@ -45,7 +45,11 @@ class User(PublicUUIDMixin, Base):
 
     role_record = relationship("Role", back_populates="users", foreign_keys=[role_id])
     department_record = relationship("Department", back_populates="users")
-    applications = relationship("ServiceApplication", back_populates="citizen")
+    applications = relationship(
+        "ServiceApplication",
+        back_populates="citizen",
+        foreign_keys="ServiceApplication.citizen_id",
+    )
     consents = relationship("DataShareConsent", back_populates="citizen")
     documents = relationship("Document", back_populates="owner")
     auth_sessions = relationship(

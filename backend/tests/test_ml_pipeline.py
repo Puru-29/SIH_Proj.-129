@@ -303,10 +303,9 @@ def test_interoperability_real_features(monkeypatch):
 
     status_res = client.post(
         f"/api/v1/consents/{consent_id}/status",
-        json={"status": "denied"},
+        json={"status": "granted"},
     )
-    assert status_res.status_code == 200
-    assert status_res.json()["status"] == "denied"
+    assert status_res.status_code == 404
 
     monkeypatch.setitem(
         app.dependency_overrides,

@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from app.database import SessionLocal
 from app.core.security import hash_password
 from app.models import (
@@ -182,6 +184,8 @@ def seed_database():
             source_department_id=plat_aaple.department_id,
             requesting_department_id=plat_sarathi.department_id,
             requested_data="Income and land record details",
+            granted_at=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
         )
         db.add(consent)
 

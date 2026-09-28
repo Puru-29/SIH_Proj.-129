@@ -34,6 +34,9 @@ class ServiceApplication(PublicUUIDMixin, TimestampMixin, Base):
     department_id: Mapped[int] = mapped_column(
         ForeignKey("departments.id", ondelete="RESTRICT"), index=True
     )
+    assigned_officer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     form_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -41,7 +44,8 @@ class ServiceApplication(PublicUUIDMixin, TimestampMixin, Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    citizen = relationship("User", back_populates="applications")
+    citizen = relationship("User", back_populates="applications", foreign_keys=[citizen_id])
+    assigned_officer = relationship("User", foreign_keys=[assigned_officer_id])
     service = relationship("Service", back_populates="applications")
     department = relationship("Department", back_populates="applications")
     documents = relationship("Document", back_populates="application")
@@ -72,6 +76,35 @@ class ServiceApplication(PublicUUIDMixin, TimestampMixin, Base):
                 "started_at": step.started_at.isoformat() if step.started_at else None,
                 "completed_at": step.completed_at.isoformat() if step.completed_at else None,
                 "error": step.error_message,
+                "step_id": step.step_key,
+                "department": step.department,
+                "type": step.step_type,
+                "order": step.sequence,
+                "required": step.required,
+                "action": step.action or {},
+                "next_steps": step.next_steps or [],
             }
             for step in self.workflow_run.steps
         ]
+
+    @property
+    def current_workflow_step(self) -> dict | None:
+        if self.workflow_run is None:
+            return None
+        current = next(
+            (
+                step
+                for step in self.workflow_run.steps
+                if step.status == "in_progress"
+            ),
+            None,
+        )
+        if current is None:
+            return None
+        return {
+            "step_id": current.step_key,
+            "name": current.name,
+            "department": current.department,
+            "type": current.step_type,
+            "status": current.status,
+        }

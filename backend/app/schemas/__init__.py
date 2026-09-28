@@ -23,6 +23,14 @@ from app.schemas.ml import (
     AnomalyDetectionRequest,
     AnomalyDetectionResponse,
 )
+from app.schemas.common_data_model import (
+    Application as CommonApplication,
+    Citizen as CommonCitizen,
+    Document as CommonDocument,
+    GovernmentRecord as CommonGovernmentRecord,
+    VerifiedRecord,
+    VerificationStatus,
+)
 
 __all__ = [
     "UserCreate",
@@ -57,5 +65,10 @@ __all__ = [
     "MLSystemStatusResponse",
     "AnomalyDetectionRequest",
     "AnomalyDetectionResponse",
+    "CommonApplication",
+    "CommonCitizen",
+    "CommonDocument",
+    "CommonGovernmentRecord",
+    "VerifiedRecord",
+    "VerificationStatus",
 ]
-

@@ -396,6 +396,7 @@ def _service_config_key(service: Any) -> str:
 def get_service_config(service: Any) -> dict[str, Any]:
     key = _service_config_key(service)
     config = deepcopy(SERVICE_CONFIGS[key])
+    config.pop("workflow", None)
     personal_extras = {
         "PRE_MATRIC": ["date_of_birth", "gender"],
         "POST_MATRIC": ["date_of_birth", "gender"],
@@ -466,9 +467,3 @@ def validate_form_data(
         if extra:
             errors.append("Submitted form contains fields not supported by this service.")
     return errors
-
-
-def get_workflow_stages(service: Any) -> list[dict[str, Any]]:
-    now_iso = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
-    labels = get_service_config(service)["workflow"]
-    return [{"key": label.lower().replace(" / ", "_").replace(" ", "_"), "label": label, "status": "completed" if index == 0 else "pending", "detail": label, "attempts": 1 if index == 0 else 0, "started_at": now_iso if index == 0 else None, "completed_at": now_iso if index == 0 else None, "error": None} for index, label in enumerate(labels)]

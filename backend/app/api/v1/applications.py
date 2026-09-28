@@ -1,10 +1,11 @@
-from datetime import datetime, timezone
+from datetime import datetime
 import random
 import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -17,11 +18,18 @@ from app.api.deps import (
 from app.models.application import ApplicationStatus, ServiceApplication
 from app.models.application_event import ApplicationEvent
 from app.models.audit import AuditLog
+from app.models.consent import DataShareConsent
+from app.models.document import Document
+from app.models.government_record import GovernmentRecord
+from app.models.interoperability_exception import InteroperabilityException
 from app.models.service import Service
+from app.models.transaction import InteroperabilityTransaction
+from app.models.transaction_event import TransactionEvent
 from app.models.user import User
-from app.models.workflow import Workflow, WorkflowStep
+from app.models.workflow import Workflow
 from app.schemas.application import ApplicationCreate, ApplicationUpdate, WorkflowStageUpdate
-from app.services.service_config import get_workflow_stages, validate_form_data
+from app.services.service_config import validate_form_data
+from app.services.workflow_engine import WorkflowEngineError, workflow_engine
 
 router = APIRouter(prefix="/applications", tags=["Service Applications"])
 
@@ -42,28 +50,16 @@ class EnrichedApplicationRead(BaseModel):
     service_name: str | None = None
     service_code: str | None = None
     department_name: str | None = None
+    assigned_officer_id: int | None = None
+    assigned_officer_name: str | None = None
+    current_workflow_step: dict | None = None
+    sla_due_at: datetime | None = None
     location: str | None = None
     form_data: dict | None = None
     workflow: list[dict] | None = None
     created_at: datetime
     updated_at: datetime
     document_count: int = 0
-
-
-def get_default_workflow_stages() -> list[dict]:
-    """Get default workflow stages for applications."""
-    now_iso = datetime.now(timezone.utc).isoformat()
-    return [
-        {"key": "submitted", "label": "Application Submitted", "status": "completed", "detail": "Application form submitted via citizen portal", "attempts": 1, "started_at": now_iso, "completed_at": now_iso, "error": None},
-        {"key": "auth", "label": "Authentication", "status": "pending", "detail": "Aadhaar eKYC verification", "attempts": 0, "started_at": None, "completed_at": None, "error": None},
-        {"key": "consent", "label": "Consent Capture", "status": "pending", "detail": "Data share consent collection", "attempts": 0, "started_at": None, "completed_at": None, "error": None},
-        {"key": "income", "label": "Income Verification", "status": "pending", "detail": "Cross-check income against tax records", "attempts": 0, "started_at": None, "completed_at": None, "error": None},
-        {"key": "education", "label": "Education Verification", "status": "pending", "detail": "Verify institutional enrollment and marks", "attempts": 0, "started_at": None, "completed_at": None, "error": None},
-        {"key": "bank", "label": "Bank Verification", "status": "pending", "detail": "Verify bank account details", "attempts": 0, "started_at": None, "completed_at": None, "error": None},
-        {"key": "eligibility", "label": "Eligibility Check", "status": "pending", "detail": "Determine scholarship eligibility", "attempts": 0, "started_at": None, "completed_at": None, "error": None},
-        {"key": "approval", "label": "Final Approval", "status": "pending", "detail": "Government approval officer review", "attempts": 0, "started_at": None, "completed_at": None, "error": None},
-        {"key": "completed", "label": "Application Completed", "status": "pending", "detail": "Scholarship disbursement and notifications", "attempts": 0, "started_at": None, "completed_at": None, "error": None},
-    ]
 
 
 def enrich_application(app: ServiceApplication) -> dict[str, Any]:
@@ -82,6 +78,12 @@ def enrich_application(app: ServiceApplication) -> dict[str, Any]:
         "service_name": app.service.name if app.service else None,
         "service_code": app.service.code if app.service else None,
         "department_name": (app.service.department.name if app.service and app.service.department else None),
+        "assigned_officer_id": app.assigned_officer_id,
+        "assigned_officer_name": (
+            app.assigned_officer.full_name if app.assigned_officer else None
+        ),
+        "current_workflow_step": app.current_workflow_step,
+        "sla_due_at": app.workflow_run.sla_due_at if app.workflow_run else None,
         "location": app.location,
         "form_data": app.form_data,
         "workflow": app.workflow,
@@ -108,6 +110,7 @@ def list_applications(
     status_filter: ApplicationStatus | None = Query(None, alias="status"),
     citizen_id: int | None = Query(None),
     service_id: int | None = Query(None),
+    assigned_to_me: bool = Query(False),
     search: str | None = Query(None, description="Search by reference ID or applicant name"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -118,6 +121,8 @@ def list_applications(
         .options(
             joinedload(ServiceApplication.citizen),
             joinedload(ServiceApplication.service).joinedload(Service.department),
+            joinedload(ServiceApplication.assigned_officer),
+            joinedload(ServiceApplication.workflow_run).joinedload(Workflow.steps),
             joinedload(ServiceApplication.documents),
         )
     )
@@ -137,6 +142,15 @@ def list_applications(
             return []
         query = query.filter(
             ServiceApplication.department_id == current_user.department_id
+        )
+    if assigned_to_me:
+        if role_key != "department_officer":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only department officers can filter their assigned applications.",
+            )
+        query = query.filter(
+            ServiceApplication.assigned_officer_id == current_user.id
         )
     if citizen_id is not None and role_key != "citizen":
         query = query.filter(ServiceApplication.citizen_id == citizen_id)
@@ -241,50 +255,363 @@ def update_application_workflow(
     app = db.query(ServiceApplication).filter(ServiceApplication.id == application_id).first()
     if not app:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
+    run = app.workflow_run
+    step = next(
+        (item for item in run.steps if item.step_key == payload.stage_key),
+        None,
+    ) if run else None
+    role_key = get_user_role_key(current_user)
+    if role_key == "department_officer":
+        officer_department = current_user.department_record
+        if (
+            step is None
+            or step.department is None
+            or officer_department is None
+            or not workflow_engine._same_department(
+                workflow_engine._compact(officer_department.name),
+                workflow_engine._compact(step.department),
+            )
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This workflow step is not assigned to your department.",
+            )
+        if app.assigned_officer_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Assign this application to yourself before acting on its workflow.",
+            )
+    else:
+        ensure_resource_access(
+            current_user, citizen_id=app.citizen_id, department_id=app.department_id
+        )
+
+    try:
+        workflow_engine.transition_step(
+            db,
+            app,
+            payload.stage_key,
+            next_status=payload.status,
+            actor_id=current_user.id,
+            detail=payload.detail,
+            error=payload.error,
+            next_step=payload.next_step,
+        )
+    except WorkflowEngineError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    db.refresh(app)
+    return app.workflow
+
+
+@router.post("/{application_id}/assign-to-me", response_model=EnrichedApplicationRead)
+def assign_application_to_me(
+    application_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_role("department_officer"))],
+):
+    app = (
+        db.query(ServiceApplication)
+        .filter(ServiceApplication.id == application_id)
+        .with_for_update()
+        .first()
+    )
+    if app is None:
+        raise HTTPException(status_code=404, detail="Application not found.")
+    ensure_resource_access(
+        current_user, citizen_id=app.citizen_id, department_id=app.department_id
+    )
+    if app.assigned_officer_id not in (None, current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This application is already assigned to another officer.",
+        )
+    if app.assigned_officer_id is None:
+        app.assigned_officer_id = current_user.id
+        db.add(
+            ApplicationEvent(
+                application_id=app.id,
+                actor_id=current_user.id,
+                event_type="application_assigned",
+                status=app.status.value,
+                note=f"Assigned to {current_user.full_name}.",
+            )
+        )
+        db.add(
+            AuditLog(
+                action="APPLICATION_ASSIGNED",
+                entity_type="service_application",
+                entity_id=str(app.id),
+                details=f"Application assigned to {current_user.full_name}.",
+                actor_id=current_user.id,
+            )
+        )
+        db.commit()
+        db.refresh(app)
+    return enrich_application(app)
+
+
+@router.get("/{application_id}/workspace")
+def get_application_workspace(
+    application_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_authenticated_user)],
+):
+    app = (
+        db.query(ServiceApplication)
+        .options(
+            joinedload(ServiceApplication.citizen),
+            joinedload(ServiceApplication.service).joinedload(Service.department),
+            joinedload(ServiceApplication.assigned_officer),
+            joinedload(ServiceApplication.workflow_run).joinedload(Workflow.steps),
+            joinedload(ServiceApplication.documents),
+        )
+        .filter(ServiceApplication.id == application_id)
+        .first()
+    )
+    if app is None:
+        raise HTTPException(status_code=404, detail="Application not found.")
     ensure_resource_access(
         current_user, citizen_id=app.citizen_id, department_id=app.department_id
     )
 
-    if not app.workflow_run:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No workflow found for this application")
-
-    stage = next(
-        (step for step in app.workflow_run.steps if step.step_key == payload.stage_key), None
+    records = (
+        db.query(GovernmentRecord)
+        .options(joinedload(GovernmentRecord.department), joinedload(GovernmentRecord.values))
+        .filter(GovernmentRecord.application_id == app.id)
+        .order_by(GovernmentRecord.created_at.desc())
+        .all()
     )
-    if not stage:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Stage '{payload.stage_key}' not found in workflow",
+    consent_query = db.query(DataShareConsent).filter(
+        DataShareConsent.citizen_id == app.citizen_id
+    )
+    consent_filters = [DataShareConsent.application_id == app.id]
+    if app.service is not None:
+        consent_filters.append(
+            (DataShareConsent.application_id.is_(None))
+            & (DataShareConsent.target_platform_id == app.service.platform_id)
         )
-
-    # Update stage
-    stage.status = payload.status
-    if payload.detail:
-        stage.detail = payload.detail
-    if payload.status == "completed":
-        stage.completed_at = (
-            datetime.fromisoformat(payload.completed_at)
-            if payload.completed_at
-            else datetime.now(timezone.utc)
+    consents = (
+        consent_query.options(joinedload(DataShareConsent.source_platform))
+        .filter(or_(*consent_filters))
+        .order_by(DataShareConsent.created_at.desc())
+        .all()
+    )
+    transactions = (
+        db.query(InteroperabilityTransaction)
+        .filter(InteroperabilityTransaction.application_id == app.id)
+        .order_by(InteroperabilityTransaction.created_at.desc())
+        .all()
+    )
+    transaction_events = (
+        db.query(TransactionEvent)
+        .filter(
+            TransactionEvent.transaction_id.in_(
+                [transaction.id for transaction in transactions]
+            )
         )
-    elif payload.completed_at:
-        stage.completed_at = datetime.fromisoformat(payload.completed_at)
-    if payload.error:
-        stage.error_message = payload.error
-    stage.attempts += 1
-
-    db.add(
-        ApplicationEvent(
-            application_id=app.id,
-            event_type="workflow_step_updated",
-            status=payload.status,
-            note=payload.detail or payload.error,
+        .order_by(TransactionEvent.occurred_at.desc())
+        .all()
+        if transactions
+        else []
+    )
+    exceptions = (
+        db.query(InteroperabilityException)
+        .filter(
+            or_(
+                InteroperabilityException.service_application_id == app.id,
+                InteroperabilityException.application_id.in_(
+                    [str(app.id), app.reference_id]
+                ),
+            )
+        )
+        .order_by(InteroperabilityException.created_at.desc())
+        .all()
+    )
+    application_events = (
+        db.query(ApplicationEvent)
+        .filter(ApplicationEvent.application_id == app.id)
+        .order_by(ApplicationEvent.occurred_at.desc())
+        .all()
+    )
+    related_ids = {
+        str(app.id),
+        app.reference_id,
+        *(str(record.id) for record in records),
+        *(str(document.id) for document in app.documents),
+        *(str(consent.id) for consent in consents),
+        *(str(transaction.id) for transaction in transactions),
+        *(transaction.transaction_id for transaction in transactions),
+    }
+    transaction_public_ids = [transaction.public_id for transaction in transactions]
+    audit_query = db.query(AuditLog).filter(
+        or_(
+            AuditLog.entity_id.in_(related_ids),
+            AuditLog.resource_id.in_(related_ids),
+            AuditLog.transaction_id.in_(transaction_public_ids)
+            if transaction_public_ids
+            else AuditLog.id == -1,
         )
     )
-    db.commit()
-    db.refresh(app)
+    audit_logs = audit_query.order_by(AuditLog.occurred_at.desc()).limit(200).all()
 
-    return app.workflow
+    return {
+        "application": enrich_application(app),
+        "citizen": {
+            "id": app.citizen.id,
+            "full_name": app.citizen.full_name,
+            "email": app.citizen.email,
+            "phone": app.citizen.phone,
+            "aadhaar_last4": app.citizen.aadhaar_last4,
+        },
+        "application_information": {
+            "id": app.id,
+            "reference_id": app.reference_id,
+            "status": app.status.value,
+            "service_id": app.service_id,
+            "service_name": app.service.name if app.service else None,
+            "department_name": (
+                app.service.department.name
+                if app.service and app.service.department
+                else None
+            ),
+            "submitted_at": app.created_at.isoformat() if app.created_at else None,
+            "form_data": app.form_data or {},
+            "sla_due_at": (
+                app.workflow_run.sla_due_at.isoformat()
+                if app.workflow_run and app.workflow_run.sla_due_at
+                else None
+            ),
+            "assigned_officer_id": app.assigned_officer_id,
+            "assigned_officer_name": (
+                app.assigned_officer.full_name if app.assigned_officer else None
+            ),
+        },
+        "verified_records": [
+            {
+                "id": str(record.id),
+                "record_type": record.record_type,
+                "status": record.status,
+                "department": record.department.name if record.department else None,
+                "source_record_id": record.source_record_id,
+                "verified_at": record.verified_at.isoformat() if record.verified_at else None,
+                "values": {
+                    value.field_key: value.field_value for value in record.values
+                },
+            }
+            for record in records
+        ],
+        "documents": [
+            {
+                "id": document.id,
+                "title": document.title,
+                "doc_type": document.doc_type,
+                "is_verified": document.is_verified,
+                "verification_score": document.verification_score,
+                "fraud_risk_level": document.fraud_risk_level,
+                "created_at": document.created_at.isoformat()
+                if document.created_at
+                else None,
+            }
+            for document in app.documents
+        ],
+        "consents": [
+            {
+                "id": consent.id,
+                "purpose": consent.purpose,
+                "requested_data": consent.requested_data,
+                "status": consent.status.value,
+                "source_department": (
+                    consent.source_platform.department.name
+                    if consent.source_platform and consent.source_platform.department
+                    else None
+                ),
+                "granted_at": consent.granted_at.isoformat()
+                if consent.granted_at
+                else None,
+                "expires_at": consent.expires_at.isoformat()
+                if consent.expires_at
+                else None,
+                "revoked_at": consent.revoked_at.isoformat()
+                if consent.revoked_at
+                else None,
+            }
+            for consent in consents
+        ],
+        "transactions": [
+            {
+                "transaction_id": transaction.transaction_id,
+                "status": transaction.status,
+                "source_department": transaction.source_department,
+                "requesting_department": transaction.requesting_department,
+                "data_requested": transaction.data_requested,
+                "requested_at": transaction.requested_at.isoformat()
+                if transaction.requested_at
+                else None,
+                "completed_at": transaction.completed_at.isoformat()
+                if transaction.completed_at
+                else None,
+                "error_message": transaction.error_message,
+            }
+            for transaction in transactions
+        ],
+        "transaction_events": [
+            {
+                "id": str(event.id),
+                "transaction_id": event.transaction_id,
+                "event_type": event.event_type,
+                "status": event.status,
+                "detail": event.detail,
+                "error_code": event.error_code,
+                "error_message": event.error_message,
+                "occurred_at": event.occurred_at.isoformat()
+                if event.occurred_at
+                else None,
+            }
+            for event in transaction_events
+        ],
+        "workflow": app.workflow,
+        "exceptions": [
+            {
+                "id": exception.id,
+                "system": exception.system,
+                "category": exception.category,
+                "message": exception.message,
+                "severity": exception.severity,
+                "status": exception.status.value,
+                "details": exception.details,
+                "created_at": exception.created_at.isoformat()
+                if exception.created_at
+                else None,
+            }
+            for exception in exceptions
+        ],
+        "audit_events": [
+            {
+                "id": str(event.id),
+                "action": event.event_type,
+                "entity_type": "application_event",
+                "details": event.note,
+                "actor_id": event.actor_id,
+                "created_at": event.occurred_at.isoformat()
+                if event.occurred_at
+                else None,
+            }
+            for event in application_events
+        ]
+        + [
+            {
+                "id": audit.id,
+                "action": audit.action,
+                "entity_type": audit.entity_type,
+                "details": audit.details,
+                "actor_id": audit.actor_id,
+                "created_at": audit.occurred_at.isoformat()
+                if audit.occurred_at
+                else None,
+            }
+            for audit in audit_logs
+        ],
+    }
 
 
 @router.post("", response_model=EnrichedApplicationRead, status_code=status.HTTP_201_CREATED)
@@ -317,7 +644,12 @@ def create_application(
         if existing:
             ref_id = f"APP-2026-{uuid.uuid4().hex[:6].upper()}"
 
-        workflow_stages = get_workflow_stages(svc)
+        workflow_definition = workflow_engine.ensure_definition(db, svc)
+        if workflow_definition is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="No workflow definition is configured for this service.",
+            )
 
         app = ServiceApplication(
             reference_id=ref_id,
@@ -334,34 +666,7 @@ def create_application(
         )
         db.add(app)
         db.flush()
-        workflow = Workflow(
-            service_id=svc.id,
-            application_id=app.id,
-            name=f"{svc.name} application workflow",
-        )
-        workflow.steps = [
-            WorkflowStep(
-                step_key=stage["key"],
-                name=stage["label"],
-                sequence=index,
-                status=stage["status"],
-                attempts=stage.get("attempts", 0),
-                detail=stage.get("detail"),
-                error_message=stage.get("error"),
-                started_at=(
-                    datetime.fromisoformat(stage["started_at"])
-                    if stage.get("started_at")
-                    else None
-                ),
-                completed_at=(
-                    datetime.fromisoformat(stage["completed_at"])
-                    if stage.get("completed_at")
-                    else None
-                ),
-            )
-            for index, stage in enumerate(workflow_stages)
-        ]
-        db.add(workflow)
+        workflow_engine.create_run(db, app, workflow_definition)
         db.add(
             ApplicationEvent(
                 application_id=app.id,
@@ -420,6 +725,11 @@ def update_application_status(
     ensure_resource_access(
         current_user, citizen_id=app.citizen_id, department_id=app.department_id
     )
+    if payload.status in {ApplicationStatus.APPROVED, ApplicationStatus.REJECTED}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Applications must be approved or rejected through their configured workflow.",
+        )
 
     old_status = app.status
     if payload.status:

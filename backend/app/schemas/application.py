@@ -56,6 +56,7 @@ class WorkflowStageUpdate(BaseModel):
     detail: str | None = None
     completed_at: str | None = None
     error: str | None = None
+    next_step: str | None = None
 
 
 class CitizenProfileInput(BaseModel):

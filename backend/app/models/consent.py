@@ -22,7 +22,9 @@ class DataShareConsent(PublicUUIDMixin, TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     purpose: Mapped[str] = mapped_column(String(255))
-    status: Mapped[ConsentStatus] = mapped_column(Enum(ConsentStatus), default=ConsentStatus.GRANTED)
+    status: Mapped[ConsentStatus] = mapped_column(
+        Enum(ConsentStatus), default=ConsentStatus.PENDING
+    )
     source_platform_id: Mapped[int] = mapped_column(
         ForeignKey("connected_systems.id", ondelete="RESTRICT"), index=True
     )

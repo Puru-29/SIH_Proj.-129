@@ -1,7 +1,7 @@
 from datetime import datetime
 import uuid
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Uuid, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -24,6 +24,12 @@ class Workflow(PublicUUIDMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="active", nullable=False, index=True)
+    required_records: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    required_consents: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    departments: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    transitions: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    sla_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sla_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     service = relationship("Service", back_populates="workflows")
     application = relationship("ServiceApplication", back_populates="workflow_run")
@@ -50,7 +56,11 @@ class WorkflowStep(TimestampMixin, Base):
     step_key: Mapped[str] = mapped_column(String(80), nullable=False)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
-    step_type: Mapped[str] = mapped_column(String(40), default="verification", nullable=False)
+    step_type: Mapped[str] = mapped_column(String(40), default="DATA_VALIDATION", nullable=False)
+    department: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    action: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    next_steps: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)

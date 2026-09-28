@@ -294,15 +294,30 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
     }
     setSubmissionError("");
     try {
-      const consent = await api.createConsent({
-        purpose: consentPurpose(requirement),
-        source_platform_id: sourcePlatform.id,
-        target_platform_id: targetPlatform.id,
-        citizen_id: citizen.id,
-        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        status: decision === "allow" ? "granted" : "denied",
-      });
-      setConsentIds((current) => ({ ...current, [requirement.key]: consent.id }));
+      const existingConsentId = consentIds[requirement.key];
+      const consentId =
+        existingConsentId ??
+        (
+          await api.createConsent({
+            purpose: consentPurpose(requirement),
+            source_platform_id: sourcePlatform.id,
+            target_platform_id: targetPlatform.id,
+            citizen_id: citizen.id,
+            requested_data: requirement.dataRequested,
+            requested_fields: [requirement.dataRequested],
+          })
+        ).id;
+      setConsentIds((current) => ({ ...current, [requirement.key]: consentId }));
+      const decidedConsent =
+        decision === "allow"
+          ? await api.approveConsent(consentId)
+          : await api.rejectConsent(consentId);
+      if (
+        decision === "allow" &&
+        (decidedConsent.status !== "granted" || !decidedConsent.expires_at)
+      ) {
+        throw new Error("Consent approval was not confirmed by the backend.");
+      }
       setConsentDecisions((current) => ({ ...current, [requirement.key]: decision }));
       toast.success(decision === "allow" ? "Consent recorded." : "Consent denial recorded.");
     } catch (error) {
@@ -385,19 +400,19 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
           purpose: consentPurpose(requirement),
           consent_id: consentId,
         });
-        if (result.status !== "success" && result.status !== "completed") {
-          throw new Error(
-            result.message || `The ${requirement.sourceDepartment} data request was not completed.`,
-          );
-        }
         setExchangeResults((current) => [
           ...current,
           {
             department: requirement.sourceDepartment,
-            status: result.status,
+            status: result.transactionStatus,
             transactionId: result.transactionId,
           },
         ]);
+        if (result.transactionStatus === "FAILED") {
+          throw new Error(
+            result.message || `The ${requirement.sourceDepartment} data request was not completed.`,
+          );
+        }
       }
 
       for (const [documentName, file] of Object.entries(uploadedFiles)) {

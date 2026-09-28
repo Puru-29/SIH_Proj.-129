@@ -1,4 +1,4 @@
-from app.database import Base, SessionLocal, engine
+from app.database import SessionLocal
 from app.core.security import hash_password
 from app.models import (
     User,
@@ -17,8 +17,7 @@ from app.models.consent import ConsentStatus
 
 
 def seed_database():
-    print("Creating all database tables...")
-    Base.metadata.create_all(bind=engine)
+    print("Seeding development data into the migrated database...")
 
     db = SessionLocal()
     try:
@@ -159,6 +158,7 @@ def seed_database():
             remarks="Application submitted with income proofs",
             citizen_id=citizen.id,
             service_id=svc_income.id,
+            department_id=dept_rev.id,
         )
         app2 = ServiceApplication(
             reference_id="MH-TRANS-2026-0002",
@@ -166,6 +166,7 @@ def seed_database():
             remarks="DL verification completed successfully via interoperability gateway",
             citizen_id=citizen.id,
             service_id=svc_dl.id,
+            department_id=dept_trans.id,
         )
         db.add_all([app1, app2])
         db.commit()
@@ -178,6 +179,9 @@ def seed_database():
             source_platform_id=plat_aaple.id,
             target_platform_id=plat_sarathi.id,
             citizen_id=citizen.id,
+            source_department_id=plat_aaple.department_id,
+            requesting_department_id=plat_sarathi.department_id,
+            requested_data="Income and land record details",
         )
         db.add(consent)
 

@@ -4,12 +4,21 @@
  */
 
 export const API_BASE_URL =
-  (typeof window !== "undefined" && (window as any).__VITE_API_URL__) ||
+  (typeof window !== "undefined" && (window as any).__VITE_API_BASE_URL__) ||
+  import.meta.env["VITE_API_BASE_URL"] ||
   import.meta.env["VITE_API_URL"] ||
   "http://127.0.0.1:8000/api/v1";
 
 
 export const BACKEND_ROOT_URL = API_BASE_URL.replace(/\/api\/v1\/?$/, "");
+
+if (typeof window !== "undefined") {
+  try {
+    window.localStorage.removeItem("govflow_jwt_token");
+  } catch {
+    // Storage may be unavailable; tokens are never read from or written to it.
+  }
+}
 
 export interface ApiResponse<T> {
   data?: T;
@@ -62,6 +71,12 @@ export interface MeshNodePlatform {
     department?: string | null;
   description?: string | null;
   department_id: number;
+}
+
+export interface MeshDepartment {
+  id: number;
+  name: string;
+  code?: string;
 }
 
 export interface MeshService {
@@ -125,12 +140,22 @@ export interface MeshApplication {
   workflow?: Array<{ key: string; label: string; status: string; detail: string; attempts: number }>;
 }
 
+export interface MeshDocument {
+  id: number;
+  title: string;
+  doc_type: string;
+  owner_id: number;
+  application_id: number | null;
+  is_verified: boolean;
+  created_at: string;
+}
+
 export interface MeshConsent {
   id: number;
   application_id?: number;
   applicationId?: string;
   purpose: string;
-  status: "granted" | "revoked" | "expired";
+  status: "pending" | "granted" | "denied" | "active" | "revoked" | "expired";
   source_platform_id: number;
   source_platform_name?: string | null;
   target_platform_id: number;
@@ -140,6 +165,16 @@ export interface MeshConsent {
   citizen_aadhaar_last4?: string | null;
   created_at: string;
   expires_at?: string | null;
+}
+
+export interface InteroperabilityResult {
+  status: string;
+  message: string;
+  transactionId: string;
+  data?: Record<string, unknown>;
+  record?: { source: string; status: string };
+  applicationId: number;
+  validation?: Record<string, unknown>;
 }
 
 export interface MeshAuditLog {
@@ -173,58 +208,85 @@ export interface MLSystemStatus {
 }
 
 
-// Token helper
-const TOKEN_KEY = "govflow_jwt_token";
+let accessToken: string | null = null;
+let refreshPromise: Promise<AuthResponse | null> | null = null;
 
 export function getStoredToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(TOKEN_KEY);
+  return accessToken;
 }
 
 export function setStoredToken(token: string): void {
-  if (typeof window !== "undefined") {
-    localStorage.setItem(TOKEN_KEY, token);
-  }
+  accessToken = token;
 }
 
 export function clearStoredToken(): void {
-  if (typeof window !== "undefined") {
-    localStorage.removeItem(TOKEN_KEY);
-  }
+  accessToken = null;
+}
+
+async function refreshAccessToken(): Promise<AuthResponse | null> {
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        clearStoredToken();
+        return null;
+      }
+
+      const result = (await response.json()) as AuthResponse;
+      if (!result.access_token) {
+        clearStoredToken();
+        return null;
+      }
+      setStoredToken(result.access_token);
+      return result;
+    } catch {
+      clearStoredToken();
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
 }
 
 async function request<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<{ data: T | null; error: string | null; status: number }> {
-  const token = getStoredToken();
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(options.headers as Record<string, string>),
-  };
-
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
   const url = endpoint.startsWith("http")
     ? endpoint
     : `${API_BASE_URL}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
 
   try {
-    const res = await fetch(url, {
-      ...options,
-      headers,
-    });
+    const send = () => {
+      const headers = new Headers(options.headers);
+      if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+      const token = getStoredToken();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      else headers.delete("Authorization");
+      return fetch(url, { ...options, headers, credentials: "include" });
+    };
+
+    let res = await send();
+    const isCredentialEndpoint = /^\/auth\/(login|signup|refresh|logout)(?:\?|$)/.test(endpoint);
+    if (res.status === 401 && !isCredentialEndpoint) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) res = await send();
+    }
 
     const isJson = res.headers.get("content-type")?.includes("application/json");
     const body = isJson ? await res.json() : null;
 
     if (!res.ok) {
-      const errorMsg =
-        body?.detail ||
-        (Array.isArray(body?.detail) ? body.detail[0]?.msg : null) ||
-        `HTTP Error ${res.status}`;
+      const errorMsg = Array.isArray(body?.detail)
+        ? body.detail[0]?.msg || `HTTP Error ${res.status}`
+        : body?.detail || `HTTP Error ${res.status}`;
       return { data: null, error: errorMsg, status: res.status };
     }
 
@@ -244,6 +306,7 @@ export const api = {
     try {
       const res = await fetch(`${BACKEND_ROOT_URL}/health`, {
         signal: AbortSignal.timeout(3500),
+        credentials: "include",
       });
       if (res.ok) return await res.json();
     } catch {
@@ -264,15 +327,20 @@ export const api = {
 
   // Auth
   async login(email: string, password: string): Promise<AuthResponse> {
+    clearStoredToken();
     const res = await request<AuthResponse>("/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
     if (res.error) throw new Error(res.error);
-    if (res.data?.access_token) {
-      setStoredToken(res.data.access_token);
+    if (!res.data?.access_token) throw new Error("Sign in did not return an access token.");
+    setStoredToken(res.data.access_token);
+    const profile = await api.getMe();
+    if (!profile) {
+      clearStoredToken();
+      throw new Error("Unable to load your account profile.");
     }
-    return res.data!;
+    return { ...res.data!, user: profile };
   },
 
   async signup(data: {
@@ -281,18 +349,22 @@ export const api = {
     password: string;
     phone?: string;
     aadhaar_last4?: string;
-    department?: string;
-    role?: "citizen" | "officer" | "admin" | "developer" | "operator" | "auditor";
   }): Promise<AuthResponse> {
+    clearStoredToken();
+    const { full_name, email, password, phone, aadhaar_last4 } = data;
     const res = await request<AuthResponse>("/auth/signup", {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify({ full_name, email, password, phone, aadhaar_last4 }),
     });
     if (res.error) throw new Error(res.error);
-    if (res.data?.access_token) {
-      setStoredToken(res.data.access_token);
+    if (!res.data?.access_token) throw new Error("Registration did not return an access token.");
+    setStoredToken(res.data.access_token);
+    const profile = await api.getMe();
+    if (!profile) {
+      clearStoredToken();
+      throw new Error("Unable to load your account profile.");
     }
-    return res.data!;
+    return { ...res.data!, user: profile };
   },
 
   async getMe(): Promise<UserProfile | null> {
@@ -300,8 +372,18 @@ export const api = {
     return res.data;
   },
 
-  logout(): void {
+  async restoreSession(): Promise<UserProfile | null> {
+    const refreshed = await refreshAccessToken();
+    if (!refreshed) return null;
+
+    const profile = await api.getMe();
+    if (!profile) clearStoredToken();
+    return profile;
+  },
+
+  async logout(): Promise<void> {
     clearStoredToken();
+    await request<void>("/auth/logout", { method: "POST" });
   },
 
   // Applications
@@ -339,7 +421,8 @@ export const api = {
     citizen_id?: number;
     service_id: number;
     remarks?: string;
-    form_data?: Record<string, string>;
+    form_data?: Record<string, unknown>;
+    verified_records?: Record<string, string>;
     consent: boolean;
     location?: string;
   }): Promise<MeshApplication> {
@@ -351,6 +434,7 @@ export const api = {
         service_id: data.service_id,
         remarks: data.remarks,
         form_data: data.form_data,
+        verified_records: data.verified_records,
         consent: data.consent,
         location: data.location,
       }),
@@ -361,6 +445,12 @@ export const api = {
 
   async getApplicationWorkflow(id: number | string): Promise<MeshApplication["workflow"]> {
     const res = await request<MeshApplication["workflow"]>(`/applications/${id}/workflow`);
+    if (res.error) throw new Error(res.error);
+    return res.data || [];
+  },
+
+  async getDocuments(ownerId: number): Promise<MeshDocument[]> {
+    const res = await request<MeshDocument[]>(`/documents?owner_id=${ownerId}`);
     if (res.error) throw new Error(res.error);
     return res.data || [];
   },
@@ -402,6 +492,13 @@ export const api = {
   // Mesh Platforms
   async getPlatforms(): Promise<MeshNodePlatform[]> {
     const res = await request<MeshNodePlatform[]>("/platforms");
+    if (res.error) throw new Error(res.error);
+    return res.data || [];
+  },
+
+  async getDepartments(): Promise<MeshDepartment[]> {
+    const res = await request<MeshDepartment[]>("/departments");
+    if (res.error) throw new Error(res.error);
     return res.data || [];
   },
 
@@ -416,6 +513,7 @@ export const api = {
   // Services
   async getServices(): Promise<MeshService[]> {
     const res = await request<MeshService[]>("/services");
+    if (res.error) throw new Error(res.error);
     return res.data || [];
   },
 
@@ -458,8 +556,27 @@ export const api = {
     target_platform_id: number;
     citizen_id: number;
     expires_at?: string;
+    status: "pending" | "granted" | "denied";
   }): Promise<MeshConsent> {
     const res = await request<MeshConsent>("/consents", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    if (res.error) throw new Error(res.error);
+    return res.data!;
+  },
+
+  async requestInteroperability(data: {
+    citizen_id: number;
+    service_id: number;
+    application_id: number;
+    requesting_department: string;
+    source_department: string;
+    data_requested: string;
+    purpose: string;
+    consent_id: number;
+  }): Promise<InteroperabilityResult> {
+    const res = await request<InteroperabilityResult>("/interoperability/request", {
       method: "POST",
       body: JSON.stringify(data),
     });

@@ -1,0 +1,20 @@
+Generic single-database configuration.
+# GovFlow database migrations
+
+Set `DATABASE_URL` in `backend/.env` to the PostgreSQL database, then run from
+the `backend` directory:
+
+```powershell
+python -m alembic upgrade head
+python -m alembic current
+```
+
+Create a new revision after changing SQLAlchemy models:
+
+```powershell
+python -m alembic revision --autogenerate -m "describe schema change"
+```
+
+Review generated revisions before applying them. Do not use `Base.metadata.create_all`
+as a deployment migration mechanism. Development fixtures are loaded separately
+with `python seed_db.py` after migrations.

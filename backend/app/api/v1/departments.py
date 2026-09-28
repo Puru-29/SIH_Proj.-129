@@ -4,7 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.api.deps import require_role
 from app.models.department import Department
+from app.models.user import User
 from app.schemas.department import DepartmentCreate, DepartmentRead
 
 router = APIRouter(prefix="/departments", tags=["Departments"])
@@ -37,7 +39,11 @@ def get_department(department_id: int, db: Annotated[Session, Depends(get_db)]):
 
 
 @router.post("", response_model=DepartmentRead, status_code=status.HTTP_201_CREATED)
-def create_department(payload: DepartmentCreate, db: Annotated[Session, Depends(get_db)]):
+def create_department(
+    payload: DepartmentCreate,
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[User, Depends(require_role("system_admin"))],
+):
     """Register a new department in the inter-governmental mesh."""
     existing = db.query(Department).filter(Department.code == payload.code).first()
     if existing:

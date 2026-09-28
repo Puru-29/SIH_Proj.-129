@@ -1,9 +1,10 @@
 from enum import Enum as PyEnum
 
-from sqlalchemy import Enum, ForeignKey, String, Text
+from sqlalchemy import Boolean, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.models.model_base import PublicUUIDMixin, TimestampMixin
 
 
 class PlatformStatus(str, PyEnum):
@@ -12,8 +13,8 @@ class PlatformStatus(str, PyEnum):
     OFFLINE = "offline"
 
 
-class DigitalPlatform(Base):
-    __tablename__ = "digital_platforms"
+class ConnectedSystem(PublicUUIDMixin, TimestampMixin, Base):
+    __tablename__ = "connected_systems"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(200))
@@ -22,7 +23,16 @@ class DigitalPlatform(Base):
     api_version: Mapped[str] = mapped_column(String(20), default="v1")
     status: Mapped[PlatformStatus] = mapped_column(Enum(PlatformStatus), default=PlatformStatus.ACTIVE)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"))
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), index=True
+    )
+    integration_type: Mapped[str] = mapped_column(String(40), default="rest", nullable=False)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=15, nullable=False)
+    max_retries: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     department = relationship("Department", back_populates="platforms")
     services = relationship("Service", back_populates="platform")
+
+
+DigitalPlatform = ConnectedSystem

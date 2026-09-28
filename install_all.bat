@@ -21,12 +21,19 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
-echo [3/3] Initializing and Seeding Database...
+echo [3/3] Applying database migrations...
 cd /d "%~dp0backend"
-python seed_db.py
+python -m alembic upgrade head
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Could not reach DATABASE_URL or apply migrations.
+    echo Configure backend\.env from backend\.env.example and start PostgreSQL.
+    pause
+    exit /b %ERRORLEVEL%
+)
 
 echo ==========================================================
-echo All requirements installed and verified successfully!
+echo Dependencies installed and database schema migrated successfully!
 echo You can now run start_all.bat to launch the application.
+echo Development fixtures are optional: run python seed_db.py from backend.
 echo ==========================================================
 pause

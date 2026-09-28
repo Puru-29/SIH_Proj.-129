@@ -53,24 +53,41 @@ import {
 } from "@/components/ui/command";
 import { useGovFlow } from "@/lib/govflow/store";
 import { DEPARTMENTS, LOCATIONS, SERVICES, USERS } from "@/lib/govflow/data";
-import { BackendStatusBadge } from "./backend-status-badge";
 
 
 const NAV = [
-  { to: "dashboard", label: "Overview", icon: LayoutDashboard },
-  { to: "services", label: "Services", icon: Landmark },
-  { to: "workflows", label: "Workflows", icon: GitBranch },
-  { to: "applications", label: "Applications", icon: FileStack },
-  { to: "departments", label: "Departments", icon: Building2 },
-  { to: "integrations", label: "Integrations", icon: Boxes },
-  { to: "data-mapping", label: "Data Mapping", icon: Shuffle },
-  { to: "consent", label: "Consent Management", icon: ShieldCheck },
-  { to: "monitoring", label: "Monitoring", icon: Activity },
-  { to: "exceptions", label: "Exceptions", icon: TriangleAlert },
-  { to: "audit-logs", label: "Audit Logs", icon: FileText },
-  { to: "reports", label: "Reports", icon: FileText },
-  { to: "users", label: "Users", icon: Users },
-  { to: "settings", label: "Settings", icon: Settings },
+  {
+    group: "Overview",
+    items: [{ to: "dashboard", label: "Overview", icon: LayoutDashboard }],
+  },
+  {
+    group: "Operations",
+    items: [{ to: "applications", label: "Applications", icon: FileStack }],
+  },
+  {
+    group: "Interoperability",
+    items: [
+      { to: "monitoring", label: "Interoperability Hub", icon: Activity },
+      { to: "integrations", label: "Connected Systems", icon: Boxes },
+      { to: "consent", label: "Consent Requests", icon: ShieldCheck },
+    ],
+  },
+  {
+    group: "Execution",
+    items: [
+      { to: "workflows", label: "Workflows", icon: GitBranch },
+      { to: "data-mapping", label: "Data & Verification", icon: Shuffle },
+      { to: "exceptions", label: "Exceptions", icon: TriangleAlert },
+    ],
+  },
+  {
+    group: "Trust & Governance",
+    items: [
+      { to: "audit-logs", label: "Audit Trail", icon: FileText },
+      { to: "ai-document-verification", label: "AI Document Verification", icon: ShieldCheck },
+      { to: "settings", label: "Profile / Settings", icon: Settings },
+    ],
+  },
 ] as const;
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -142,10 +159,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Landmark className="size-5 text-sidebar-primary" />
           </div>
           <div className="min-w-0">
-            <p className="text-lg leading-none font-bold">
+            <p className="text-lg leading-none font-bold text-sidebar-foreground">
               Gov<span className="text-sidebar-primary">Flow</span>
             </p>
-            <p className="mt-1 text-[10px] leading-tight text-sidebar-foreground/60">
+            <p className="mt-1 text-[10px] font-medium leading-tight text-[#4f6473]">
               Connected Government · Stronger Citizens
             </p>
           </div>
@@ -158,22 +175,29 @@ export function AppShell({ children }: { children: ReactNode }) {
           </button>
         </div>
 
-        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-          {NAV.map((item) => (
-            <Link
-              key={item.to}
-              to={item.to === "dashboard" ? "/dashboard" : "/$feature"}
-              params={item.to === "dashboard" ? {} : { feature: item.to }}
-              className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-sidebar-foreground/75 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[status=active]:bg-sidebar-accent data-[status=active]:text-sidebar-accent-foreground"
-              activeProps={{ className: "bg-sidebar-accent text-sidebar-accent-foreground" }}
-            >
-              <item.icon className="size-4.5 shrink-0" />
-              <span className="truncate">{item.label}</span>
-            </Link>
+        <nav className="flex-1 space-y-4 overflow-y-auto px-3 py-4">
+          {NAV.map((group) => (
+            <div key={group.group} className="space-y-1">
+              <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#50657a]">
+                {group.group}
+              </p>
+              {group.items.map((item) => (
+                <Link
+                  key={`${group.group}-${item.label}`}
+                  to={item.to === "dashboard" ? "/dashboard" : "/$feature"}
+                  params={item.to === "dashboard" ? {} : { feature: item.to }}
+                  className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-sidebar-foreground/75 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[status=active]:bg-sidebar-accent data-[status=active]:text-sidebar-accent-foreground"
+                  activeProps={{ className: "bg-sidebar-accent text-sidebar-accent-foreground" }}
+                >
+                  <item.icon className="size-4.5 shrink-0" />
+                  <span className="truncate">{item.label}</span>
+                </Link>
+              ))}
+            </div>
           ))}
         </nav>
 
-        <div className="border-t border-sidebar-border px-5 py-4 text-xs text-sidebar-foreground/60">
+        <div className="border-t border-sidebar-border px-5 py-4 text-xs font-medium text-[#4b5f6f]">
           One Government. Connected for a Better Tomorrow.
         </div>
       </aside>
@@ -194,7 +218,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </button>
           <button
             onClick={() => setSearchOpen(true)}
-            className="hidden min-w-0 items-center gap-2 rounded-xl border border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted sm:flex sm:w-full sm:max-w-md"
+            className="hidden min-w-0 items-center gap-2 rounded-xl border border-border bg-muted/50 px-3 py-2 text-sm font-medium text-[#355067] transition-colors hover:bg-muted sm:flex sm:w-full sm:max-w-md"
           >
             <Search className="size-4 shrink-0" />
             <span className="truncate">Search services, departments, workflows…</span>
@@ -254,8 +278,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                         )}
                       >
                         <p className="text-sm font-semibold">{n.title}</p>
-                        <p className="text-xs text-muted-foreground">{n.body}</p>
-                        <p className="mt-1 text-[11px] text-muted-foreground">{n.time}</p>
+                        <p className="text-xs font-medium text-[#425a6c]">{n.body}</p>
+                        <p className="mt-1 text-[11px] font-medium text-[#5f7280]">{n.time}</p>
                       </button>
                     </li>
                   ))}
@@ -274,8 +298,6 @@ export function AppShell({ children }: { children: ReactNode }) {
               </PopoverContent>
             </Popover>
 
-            <BackendStatusBadge />
-
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="flex items-center gap-2 rounded-xl border border-border px-2 py-1.5 hover:bg-muted">
@@ -284,7 +306,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   </span>
                   <span className="hidden text-left lg:block">
                     <span className="block text-xs font-semibold">{user?.name ?? "Guest"}</span>
-                    <span className="block text-[11px] text-muted-foreground">
+                    <span className="block text-[11px] font-medium text-[#536d7f]">
                       {user?.role ?? "Viewer"}
                     </span>
                   </span>
@@ -294,7 +316,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuLabel>
                   <p className="text-sm">{user?.name}</p>
-                  <p className="text-xs font-normal text-muted-foreground">{user?.email}</p>
+                  <p className="text-xs font-medium text-[#425a6c]">{user?.email}</p>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
@@ -314,8 +336,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onClick={() => {
-                    signOut();
+                  onClick={async () => {
+                    await signOut();
                     navigate({ to: "/login" });
                   }}
                 >

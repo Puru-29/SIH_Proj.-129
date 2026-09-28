@@ -7,7 +7,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.api.deps import require_role
 from app.models.platform import DigitalPlatform, PlatformStatus
+from app.models.user import User
 from app.schemas.platform import PlatformCreate, PlatformRead
 
 router = APIRouter(prefix="/platforms", tags=["Digital Platforms & Mesh Nodes"])
@@ -25,6 +27,10 @@ class PingResponse(BaseModel):
 @router.get("", response_model=list[PlatformRead])
 def list_platforms(
     db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[
+        User,
+        Depends(require_role("interoperability_admin", "system_admin")),
+    ],
     department_id: int | None = Query(None, description="Filter by department"),
     status_filter: PlatformStatus | None = Query(None, alias="status"),
 ):
@@ -38,7 +44,14 @@ def list_platforms(
 
 
 @router.get("/{platform_id}", response_model=PlatformRead)
-def get_platform(platform_id: int, db: Annotated[Session, Depends(get_db)]):
+def get_platform(
+    platform_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[
+        User,
+        Depends(require_role("interoperability_admin", "system_admin")),
+    ],
+):
     """Get platform mesh node details by ID."""
     p = db.query(DigitalPlatform).filter(DigitalPlatform.id == platform_id).first()
     if not p:
@@ -47,7 +60,14 @@ def get_platform(platform_id: int, db: Annotated[Session, Depends(get_db)]):
 
 
 @router.post("", response_model=PlatformRead, status_code=status.HTTP_201_CREATED)
-def create_platform(payload: PlatformCreate, db: Annotated[Session, Depends(get_db)]):
+def create_platform(
+    payload: PlatformCreate,
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[
+        User,
+        Depends(require_role("interoperability_admin", "system_admin")),
+    ],
+):
     """Register a new digital platform mesh node."""
     existing = db.query(DigitalPlatform).filter(DigitalPlatform.slug == payload.slug).first()
     if existing:
@@ -72,7 +92,14 @@ def create_platform(payload: PlatformCreate, db: Annotated[Session, Depends(get_
 
 
 @router.post("/{platform_id}/ping", response_model=PingResponse)
-def ping_platform(platform_id: int, db: Annotated[Session, Depends(get_db)]):
+def ping_platform(
+    platform_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[
+        User,
+        Depends(require_role("interoperability_admin", "system_admin")),
+    ],
+):
     """Simulate or execute a mesh node heartbeat check, returning real-time round-trip latency."""
     p = db.query(DigitalPlatform).filter(DigitalPlatform.id == platform_id).first()
     if not p:

@@ -18,6 +18,7 @@ import { Route as OtpRouteImport } from './routes/otp'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as AppFeatureRouteImport } from './routes/_app.$feature'
 import { Route as AppDashboardRouteImport } from './routes/_app.dashboard'
+import { Route as CitizenPageRouteImport } from './routes/citizen.$page'
 import { Route as CitizenLoginRouteImport } from './routes/citizen.login'
 import { Route as CitizenRegisterRouteImport } from './routes/citizen.register'
 import { Route as AppFeatureIdRouteImport } from './routes/_app.$feature.$id'
@@ -67,6 +68,11 @@ const AppDashboardRoute = AppDashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => AppRoute,
 } as any)
+const CitizenPageRoute = CitizenPageRouteImport.update({
+  id: '/$page',
+  path: '/$page',
+  getParentRoute: () => CitizenRoute,
+} as any)
 const CitizenLoginRoute = CitizenLoginRouteImport.update({
   id: '/login',
   path: '/login',
@@ -97,6 +103,7 @@ export interface FileRoutesByFullPath {
   '/signup': typeof SignupRoute
   '/$feature': typeof AppFeatureRouteWithChildren
   '/dashboard': typeof AppDashboardRoute
+  '/citizen/$page': typeof CitizenPageRoute
   '/citizen/login': typeof CitizenLoginRoute
   '/citizen/register': typeof CitizenRegisterRoute
   '/$feature/$id': typeof AppFeatureIdRoute
@@ -111,6 +118,7 @@ export interface FileRoutesByTo {
   '/signup': typeof SignupRoute
   '/$feature': typeof AppFeatureRouteWithChildren
   '/dashboard': typeof AppDashboardRoute
+  '/citizen/$page': typeof CitizenPageRoute
   '/citizen/login': typeof CitizenLoginRoute
   '/citizen/register': typeof CitizenRegisterRoute
   '/$feature/$id': typeof AppFeatureIdRoute
@@ -127,6 +135,7 @@ export interface FileRoutesById {
   '/signup': typeof SignupRoute
   '/_app/$feature': typeof AppFeatureRouteWithChildren
   '/_app/dashboard': typeof AppDashboardRoute
+  '/citizen/$page': typeof CitizenPageRoute
   '/citizen/login': typeof CitizenLoginRoute
   '/citizen/register': typeof CitizenRegisterRoute
   '/_app/$feature/$id': typeof AppFeatureIdRoute
@@ -143,6 +152,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/$feature'
     | '/dashboard'
+    | '/citizen/$page'
     | '/citizen/login'
     | '/citizen/register'
     | '/$feature/$id'
@@ -157,6 +167,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/$feature'
     | '/dashboard'
+    | '/citizen/$page'
     | '/citizen/login'
     | '/citizen/register'
     | '/$feature/$id'
@@ -172,6 +183,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/_app/$feature'
     | '/_app/dashboard'
+    | '/citizen/$page'
     | '/citizen/login'
     | '/citizen/register'
     | '/_app/$feature/$id'
@@ -253,6 +265,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppDashboardRouteImport
       parentRoute: typeof AppRoute
     }
+    '/citizen/$page': {
+      id: '/citizen/$page'
+      path: '/$page'
+      fullPath: '/citizen/$page'
+      preLoaderRoute: typeof CitizenPageRouteImport
+      parentRoute: typeof CitizenRoute
+    }
     '/citizen/login': {
       id: '/citizen/login'
       path: '/login'
@@ -311,11 +330,13 @@ const AppRouteChildren: AppRouteChildren = {
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 interface CitizenRouteChildren {
+  CitizenPageRoute: typeof CitizenPageRoute
   CitizenLoginRoute: typeof CitizenLoginRoute
   CitizenRegisterRoute: typeof CitizenRegisterRoute
 }
 
 const CitizenRouteChildren: CitizenRouteChildren = {
+  CitizenPageRoute: CitizenPageRoute,
   CitizenLoginRoute: CitizenLoginRoute,
   CitizenRegisterRoute: CitizenRegisterRoute,
 }

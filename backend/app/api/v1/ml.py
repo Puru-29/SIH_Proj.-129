@@ -1,10 +1,14 @@
 import json
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.document import Document
+from app.api.deps import get_user_role_key, require_authenticated_user, require_role
+from app.models.application import ServiceApplication
 from app.models.audit import AuditLog
+from app.models.user import User
 from app.schemas.ml import (
     OCRRequest,
     OCRResponse,
@@ -35,11 +39,19 @@ from app.ml import (
     verification_pipeline,
 )
 
-router = APIRouter(prefix="/ml", tags=["Machine Learning & Document AI"])
+router = APIRouter(
+    prefix="/ml",
+    tags=["Machine Learning & Document AI"],
+    dependencies=[Depends(require_authenticated_user)],
+)
 
 
 @router.get("/status", response_model=MLSystemStatusResponse)
-def get_ml_system_status():
+def get_ml_system_status(
+    _admin: Annotated[
+        User, Depends(require_role("interoperability_admin", "system_admin"))
+    ],
+):
     """
     Returns health, model readiness, and execution mode for all 5 integrated AI engines:
     EasyOCR, LayoutLMv3, spaCy NER, DistilBERT, and XGBoost/LightGBM.
@@ -155,7 +167,7 @@ def run_consent_purpose_analysis(payload: ConsentPurposeRequest):
     classification = distilbert_engine.classify_consent_purpose(payload.text)
     return ConsentPurposeResponse(
         **entity_result,
-        classification=classification,
+        classification=DistilBertClassifyResponse(**classification),
     )
 
 
@@ -210,7 +222,8 @@ def run_anomaly_detection(payload: AnomalyDetectionRequest):
 @router.post("/verify-document", response_model=FullVerificationResponse)
 def run_full_document_verification(
     payload: FullVerificationRequest,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_authenticated_user)],
 ):
     """
     Executes the complete 5-stage automated AI verification pipeline:
@@ -222,6 +235,35 @@ def run_full_document_verification(
     
     Automatically records an AuditLog and updates Document records in the database.
     """
+    role_key = get_user_role_key(current_user)
+    target_user = current_user
+    if role_key == "citizen":
+        if payload.citizen_id is not None and payload.citizen_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Citizens may only verify their own documents.",
+            )
+        payload.citizen_id = current_user.id
+        payload.citizen_full_name = current_user.full_name
+        payload.citizen_aadhaar_last4 = current_user.aadhaar_last4
+    elif role_key == "department_officer":
+        if not payload.application_reference:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Department officers must provide an application in their department.",
+            )
+        application = (
+            db.query(ServiceApplication)
+            .filter(ServiceApplication.reference_id == payload.application_reference)
+            .first()
+        )
+        if application is None or application.department_id != current_user.department_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found.")
+        target_user = application.citizen
+        payload.citizen_id = target_user.id
+        payload.citizen_full_name = target_user.full_name
+        payload.citizen_aadhaar_last4 = target_user.aadhaar_last4
+
     result = verification_pipeline.verify_document(
         image_base64=payload.image_base64,
         document_text=payload.document_text,
@@ -236,23 +278,20 @@ def run_full_document_verification(
     )
 
     # Persist verification audit trail in database
-    try:
-        audit = AuditLog(
-            action="AI_DOCUMENT_VERIFICATION",
-            entity_type="document",
-            entity_id=payload.application_reference or "REF_DIRECT_VERIFY",
-            details=json.dumps({
-                "verdict": result["overall_verdict"],
-                "fraud_risk_score": result["fraud_risk_score"],
-                "risk_level": result["risk_level"],
-                "doc_type": result["document_type_detected"],
-                "name_similarity": result["name_similarity"],
-            }),
-            actor_id=payload.citizen_id,
-        )
-        db.add(audit)
-        db.commit()
-    except Exception as e:
-        db.rollback()
+    audit = AuditLog(
+        action="AI_DOCUMENT_VERIFICATION",
+        entity_type="document",
+        entity_id=payload.application_reference or "REF_DIRECT_VERIFY",
+        details=json.dumps({
+            "verdict": result["overall_verdict"],
+            "fraud_risk_score": result["fraud_risk_score"],
+            "risk_level": result["risk_level"],
+            "doc_type": result["document_type_detected"],
+            "name_similarity": result["name_similarity"],
+        }),
+        actor_id=current_user.id,
+    )
+    db.add(audit)
+    db.commit()
 
     return FullVerificationResponse(**result)

@@ -232,8 +232,8 @@ export function CitizenPortal() {
     setView("apply");
     closeNav();
   };
-  const signOut = () => {
-    api.logout();
+  const signOut = async () => {
+    await api.logout();
     navigate({ to: "/citizen/login" });
   };
   const updateField = (field: ServiceFormField, value: string | boolean) =>
@@ -480,7 +480,7 @@ export function CitizenPortal() {
           <div className="citizen-eyebrow">Citizen portal</div>
           <h1>
             Good morning, {profile?.full_name?.split(" ")[0] || "there"}{" "}
-            <span className="citizen-sun">☀</span>
+            <span className="citizen-sun"> </span>
           </h1>
           <p>Apply for government services and track your applications all in one place.</p>
         </div>

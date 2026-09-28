@@ -4,7 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.api.deps import require_role
 from app.models.service import Service
+from app.models.user import User
 from app.schemas.service import ServiceCreate, ServiceRead
 from app.services.service_config import SERVICE_NAMES, get_service_config
 
@@ -19,7 +21,7 @@ def list_services(
     is_active: bool | None = Query(None, description="Filter by active status"),
 ):
     """List all interoperable public services available across mesh nodes."""
-    query = db.query(Service).filter(Service.name.in_(SERVICE_NAMES))
+    query = db.query(Service)
     if department_id is not None:
         query = query.filter(Service.department_id == department_id)
     if platform_id is not None:
@@ -48,7 +50,11 @@ def get_service_form_schema(service_id: int, db: Annotated[Session, Depends(get_
 
 
 @router.post("", response_model=ServiceRead, status_code=status.HTTP_201_CREATED)
-def create_service(payload: ServiceCreate, db: Annotated[Session, Depends(get_db)]):
+def create_service(
+    payload: ServiceCreate,
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[User, Depends(require_role("system_admin"))],
+):
     """Register a new citizen service."""
     existing = db.query(Service).filter(Service.code == payload.code).first()
     if existing:

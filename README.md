@@ -7,8 +7,8 @@ GovFlow Connect is a GovTech interoperability platform for coordinating citizen 
 This repository contains the complete working stack:
 
 - FastAPI backend with JWT authentication and REST APIs.
-- SQLite persistence managed through SQLAlchemy.
-- Seeded demonstration data for departments, services, applications, users, mesh platforms, consents, documents, and audit logs.
+- PostgreSQL persistence managed through SQLAlchemy and versioned with Alembic.
+- Optional development fixtures are isolated in an explicit seed script.
 - React 19 + TanStack Start/Vite frontend.
 - Typed frontend API client connected through the Vite `/api` proxy.
 - Multi-stage document verification using OCR, layout analysis, entity recognition, semantic classification, risk scoring, and anomaly detection.
@@ -69,7 +69,7 @@ The result includes a verdict, confidence score, fraud risk, extracted identitie
 graph TD
     UI[React + TanStack Start + Vite] -->|REST and JWT| API[FastAPI on port 8000]
     API --> ORM[SQLAlchemy]
-    ORM --> DB[(SQLite: backend/sih26129.db)]
+    ORM --> DB[(PostgreSQL)]
     API --> AI[Document Verification Pipeline]
     AI --> OCR[EasyOCR]
     AI --> LAYOUT[LayoutLMv3]
@@ -88,10 +88,12 @@ graph TD
 |   |   |-- api/v1/       REST routers
 |   |   |-- core/         Security and JWT helpers
 |   |   |-- ml/           AI engines and verification pipeline
-|   |   |-- models/       SQLAlchemy models
+|   |   |-- models/       Relational SQLAlchemy models
 |   |   |-- schemas/      Pydantic request/response schemas
 |   |   `-- main.py       FastAPI application
-|   |-- seed_db.py        Demo database seeder
+|   |-- migrations/       Alembic schema revisions
+|   |-- seed_db.py        Optional development-data seeder
+|   |-- .env.example      PostgreSQL configuration template
 |   `-- requirements.txt  Backend dependencies
 |-- backend-node/         Optional Node workflow/connectors prototype
 |-- frontend/
@@ -132,7 +134,7 @@ cd "C:\Users\user\Projects\SIH_Proj. 129"
 .\install_all.bat
 ```
 
-The installer installs the Python requirements, runs `npm install` in the frontend directory, and creates/seeds `backend/sih26129.db`.
+The installer installs the Python requirements, runs `npm install` in the frontend directory, and applies the Alembic migrations to the configured PostgreSQL database. It does not create demo users or seed sample records.
 
 Manual installation:
 
@@ -141,10 +143,19 @@ python -m pip install -r requirements.txt
 Set-Location "frontend\govflow-connect-main\govflow-connect-main"
 npm install
 Set-Location "..\..\..\backend"
-python seed_db.py
+Copy-Item .env.example .env
+python -m alembic upgrade head
 ```
 
-The seeder avoids duplicating the normal seeded dataset when applications already exist. Use `python seed_db.py --force` only when you intentionally want to clear and recreate the demo data.
+Configure the PostgreSQL connection in `backend\.env` before applying migrations. For local development only, run `python seed_db.py` after migration to load sample records. Do not run the seed script in production.
+
+### Authentication and authorization
+
+The public signup endpoints (`POST /api/v1/auth/signup` and `/register`) create citizen accounts only. Privileged accounts are provisioned through the system-admin-only `POST /api/v1/auth/users` endpoint; role changes and deactivation use `PATCH /api/v1/auth/users/{id}`.
+
+Login returns a 15-minute bearer access token and sets a rotating, HttpOnly refresh-token cookie. Send the access token as `Authorization: Bearer <token>`. Refresh with `POST /api/v1/auth/refresh`; logout with `POST /api/v1/auth/logout`. Cookie-based auth endpoints reject browser origins outside the configured CORS allowlist. Production deployments must provide a unique `SECRET_KEY` of at least 32 characters, keep `DEBUG=false`, use HTTPS (`AUTH_COOKIE_SECURE=true`), and configure only trusted CORS origins. Never store refresh tokens in browser-accessible storage.
+
+The backend enforces these roles: `citizen`, `department_officer`, `interoperability_admin`, and `system_admin`. Citizens are limited to their own records; department officers are scoped to their assigned department; interoperability and system administration routes require the corresponding role. Frontend route visibility is not an authorization boundary.
 
 ## Running the Application
 
@@ -214,8 +225,8 @@ All versioned endpoints use the `/api/v1` prefix.
 
 | Area | Routes |
 | --- | --- |
-| System | `GET /system/health`, `GET /info` |
-| Authentication | `POST /auth/login`, `POST /auth/signup`, `POST /auth/oauth/token`, `GET /auth/me` |
+| System | `GET /system/health` (interoperability/system admin), `GET /info` |
+| Authentication | `POST /auth/login`, `POST /auth/signup`, `POST /auth/register`, `POST /auth/oauth/token`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `GET/POST /auth/users`, `PATCH /auth/users/{id}` (system admin for user management) |
 | Departments | `GET /departments`, `GET /departments/{id}`, `POST /departments` |
 | Services | `GET /services`, `GET /services/{id}`, `GET /services/{id}/form-schema`, `POST /services` |
 | Applications | `GET /applications`, `POST /applications`, `GET /applications/{id}`, `GET /applications/track/{reference_id}`, `GET/PATCH /applications/{id}/workflow`, `PATCH /applications/{id}/status` |
@@ -235,8 +246,14 @@ With the backend running:
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
 Invoke-RestMethod http://127.0.0.1:8000/api/v1/info
-Invoke-RestMethod http://127.0.0.1:8000/api/v1/ml/status
-Invoke-RestMethod http://127.0.0.1:8000/api/v1/stats/dashboard
+$session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+$login = Invoke-RestMethod http://127.0.0.1:8000/api/v1/auth/login `
+    -Method Post -ContentType "application/json" `
+    -Body (@{ email = "admin@govflow.in"; password = "Admin@123" } | ConvertTo-Json) `
+    -WebSession $session
+$headers = @{ Authorization = "Bearer $($login.access_token)" }
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/ml/status -Headers $headers -WebSession $session
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/stats/dashboard -Headers $headers -WebSession $session
 ```
 
 Run the complete backend smoke test:
@@ -268,15 +285,15 @@ From the `backend` directory:
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-The application creates missing tables and ensures required service catalog/application columns during startup. Local defaults point to `backend/sih26129.db`.
+Apply schema changes explicitly with `python -m alembic upgrade head` before starting the API. Startup does not create tables or seed data.
 
 ## Configuration and Security Notes
 
-The defaults are for local development:
+Local defaults are for development:
 
-- The JWT secret is a development default in `backend/app/config.py`.
-- CORS allows all origins by default.
-- SQLite is the local database.
+- Production startup requires a unique JWT secret of at least 32 characters when `DEBUG=false`.
+- Refresh tokens are stored in an HttpOnly cookie and rotated on refresh; server-side sessions permit logout and revocation.
+- Configure database and CORS origins explicitly for deployment.
 - Demo passwords are predictable and documented here.
 - Seeded platform URLs are metadata, not production credentials or live service access.
 

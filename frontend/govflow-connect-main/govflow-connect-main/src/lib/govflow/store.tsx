@@ -53,7 +53,7 @@ export type ConsentHistoryEntry = {
 type Store = {
   user: SessionUser | null;
   signIn: (u: SessionUser) => void;
-  signOut: () => void;
+  signOut: () => Promise<void>;
   locationId: string;
   setLocationId: (id: string) => void;
   location: ReturnType<typeof getLocation>;
@@ -265,14 +265,14 @@ export function GovFlowProvider({ children }: { children: ReactNode }) {
       window.localStorage.removeItem("govflow.state.v1");
     }
 
-    api.getMe().then((profile) => {
+    api.restoreSession().then((profile) => {
       if (profile) {
         setUser({
           name: profile.full_name,
           email: profile.email,
           mobile: profile.phone || "",
           role: profile.role === "citizen" ? "Citizen" : profile.role === "admin" ? "Admin" : profile.role === "officer" ? "Department Officer" : profile.role === "developer" ? "Developer" : profile.role === "auditor" ? "Auditor" : "Operator",
-          department: "Inter-Governmental Mesh",
+          department: profile.department || "GovFlow Platform",
           avatarInitial: profile.full_name[0]?.toUpperCase() || "G",
         });
       }
@@ -346,9 +346,9 @@ export function GovFlowProvider({ children }: { children: ReactNode }) {
     () => ({
       user,
       signIn: setUser,
-      signOut: () => {
-        api.logout();
+      signOut: async () => {
         setUser(null);
+        await api.logout();
       },
       locationId,
       setLocationId: (id) =>

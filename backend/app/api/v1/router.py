@@ -1,4 +1,8 @@
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, Depends
+from app.api.deps import require_role
+from app.models.user import User
 from app.api.v1.auth import router as auth_router
 from app.api.v1.departments import router as departments_router
 from app.api.v1.platforms import router as platforms_router
@@ -9,6 +13,7 @@ from app.api.v1.audit import router as audit_router
 from app.api.v1.stats import router as stats_router
 from app.api.v1.documents import router as documents_router
 from app.api.v1.ml import router as ml_router
+from app.api.v1.interoperability import router as interoperability_router
 
 api_v1_router = APIRouter()
 api_v1_router.include_router(auth_router)
@@ -21,10 +26,15 @@ api_v1_router.include_router(audit_router)
 api_v1_router.include_router(stats_router)
 api_v1_router.include_router(documents_router)
 api_v1_router.include_router(ml_router)
+api_v1_router.include_router(interoperability_router)
 
 
 @api_v1_router.get("/system/health", tags=["System"])
-def get_system_health():
+def get_system_health(
+    _admin: Annotated[
+        User, Depends(require_role("interoperability_admin", "system_admin"))
+    ],
+):
     return {"status": "ok", "app": "SIH26129 Inter-Governmental Mesh API"}
 
 
@@ -44,4 +54,3 @@ def get_v1_info():
             "Document Verification Pipeline",
         ],
     }
-

@@ -1,11 +1,20 @@
-import React, { useState } from "react";
-import { AlertTriangle, CheckCircle2, FileCheck, Loader2, Sparkles, XCircle } from "lucide-react";
+import React, { useRef, useState } from "react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  FileCheck,
+  FileUp,
+  Loader2,
+  ShieldAlert,
+  Sparkles,
+  XCircle,
+} from "lucide-react";
 import { api } from "@/lib/api";
 
 export function AIDocumentVerifier() {
-  const [docType, setDocType] = useState<string>("Aadhaar Card");
+  const [docType, setDocType] = useState<string>("Income Certificate");
   const [docText, setDocText] = useState<string>(
-    "GOVERNMENT OF INDIA\nUNIQUE IDENTIFICATION AUTHORITY OF INDIA\nName: Aarav Patel\nDOB: 14/08/1998\nGender: Male\nAadhaar Number: 4892 1948 8492"
+    "GOVERNMENT OF MAHARASHTRA\nREVENUE DEPARTMENT\nINCOME CERTIFICATE\nApplicant: Aarav Patel\nAnnual Family Income: Rs 1,20,000\nCertificate No: INC-92821\nIssue Date: 05/09/2026\nVerified by: Revenue Certificate System"
   );
   const [claimedIncome, setClaimedIncome] = useState<string>("120000");
   const [meshIncome, setMeshIncome] = useState<string>("125000");
@@ -13,8 +22,16 @@ export function AIDocumentVerifier() {
   const [loading, setLoading] = useState<boolean>(false);
   const [result, setResult] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [uploadedFileName, setUploadedFileName] = useState<string>("income_certificate_sample.pdf");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const samplePresets: Record<string, { text: string; income: string; mesh: string; name: string }> = {
+    "Income Certificate": {
+      text: "GOVERNMENT OF MAHARASHTRA\nREVENUE DEPARTMENT\nINCOME CERTIFICATE\nApplicant: Aarav Patel\nAnnual Family Income: Rs 1,20,000\nCertificate No: INC-92821\nIssue Date: 05/09/2026\nVerified by: Revenue Certificate System",
+      income: "120000",
+      mesh: "125000",
+      name: "Aarav Patel",
+    },
     "Aadhaar Card": {
       text: "GOVERNMENT OF INDIA\nUNIQUE IDENTIFICATION AUTHORITY OF INDIA\nName: Aarav Patel\nDOB: 14/08/1998\nGender: Male\nAadhaar Number: 4892 1948 8492",
       income: "120000",
@@ -30,7 +47,7 @@ export function AIDocumentVerifier() {
     "Suspicious / Tampered Record": {
       text: "GOVERNMENT OF INDIA INCOME CERTIFICATE\nApplicant: Unknown Entity\nDeclared Income: Rs 25,000\nAadhaar: 0000 0000 0000",
       income: "25000",
-      mesh: "650000", // Large mismatch -> anomaly!
+      mesh: "650000",
       name: "Ramesh Sharma",
     },
   };
@@ -79,11 +96,15 @@ export function AIDocumentVerifier() {
         <div>
           <div className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-primary" />
-            <h3 className="text-lg font-bold">AI Document & Fraud Verification Engine</h3>
+            <h3 className="text-lg font-bold tracking-wide">AI Document & Fraud Verification</h3>
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Inter-Governmental Multi-Model AI Stack: EasyOCR, LayoutLMv3, spaCy NER, DistilBERT, XGBoost & One-Class SVM Anomaly Detection.
+            Cross-check uploaded records against connected government data before final approval.
           </p>
+          <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+            <ShieldAlert className="h-3.5 w-3.5" />
+            Verification assisted • source and identity checks required
+          </div>
         </div>
 
         <div className="flex items-center gap-1.5 flex-wrap">
@@ -92,11 +113,10 @@ export function AIDocumentVerifier() {
             <button
               key={name}
               onClick={() => handleSelectPreset(name)}
-              className={`text-xs px-2.5 py-1 rounded-lg border transition-all ${
-                docType === name
+              className={`text-xs px-2.5 py-1 rounded-lg border transition-all ${docType === name
                   ? "bg-primary text-primary-foreground border-primary"
                   : "bg-muted/50 text-foreground border-border hover:bg-muted"
-              }`}
+                }`}
             >
               {name.split(" ")[0]}
             </button>
@@ -159,6 +179,42 @@ export function AIDocumentVerifier() {
             </div>
           </div>
 
+          <div className="rounded-xl border border-dashed border-border bg-muted/20 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <label className="text-xs font-semibold text-muted-foreground block mb-1">
+                  Upload Document
+                </label>
+                <div className="text-xs text-muted-foreground">PDF, JPG, PNG supported</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
+              >
+                <FileUp className="h-3.5 w-3.5" />
+                Choose file
+              </button>
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  setUploadedFileName(file.name);
+                  setDocType("Income Certificate");
+                  setDocText((prev) => prev || "Document uploaded for AI verification.");
+                }
+              }}
+            />
+            <div className="mt-2 rounded-lg border border-border bg-background px-2.5 py-1.5 text-[11px] text-muted-foreground">
+              {uploadedFileName}
+            </div>
+          </div>
+
           <div>
             <label className="text-xs font-semibold text-muted-foreground block mb-1">
               Document Text / OCR Stream Content
@@ -200,15 +256,14 @@ export function AIDocumentVerifier() {
               </span>
               {result && (
                 <span
-                  className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                    result.ai_pipeline_result?.overall_decision === "APPROVED" ||
-                    result.ai_pipeline_result?.overall_decision === "VERIFIED"
+                  className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${result.ai_pipeline_result?.overall_decision === "APPROVED" ||
+                      result.ai_pipeline_result?.overall_decision === "VERIFIED"
                       ? "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
                       : "bg-red-500/20 text-red-600 dark:text-red-400 border border-red-500/30"
-                  }`}
+                    }`}
                 >
                   {result.ai_pipeline_result?.overall_decision === "APPROVED" ||
-                  result.ai_pipeline_result?.overall_decision === "VERIFIED" ? (
+                    result.ai_pipeline_result?.overall_decision === "VERIFIED" ? (
                     <CheckCircle2 className="h-3.5 w-3.5" />
                   ) : (
                     <AlertTriangle className="h-3.5 w-3.5" />
@@ -230,7 +285,7 @@ export function AIDocumentVerifier() {
                 <Sparkles className="h-8 w-8 mb-2 opacity-40 text-primary" />
                 <p className="text-sm font-medium">No verification run yet</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Click "Run AI Document Authentication" to dispatch this document to the FastAPI backend.
+                  Upload a government record to compare the document against verified data in the connected system network.
                 </p>
               </div>
             )}
@@ -247,11 +302,10 @@ export function AIDocumentVerifier() {
                   <div className="p-2.5 rounded-lg bg-card border border-border">
                     <span className="text-muted-foreground block text-[11px]">Fraud Risk Level</span>
                     <span
-                      className={`text-lg font-bold ${
-                        result.ai_pipeline_result?.risk_category === "LOW"
+                      className={`text-lg font-bold ${result.ai_pipeline_result?.risk_category === "LOW"
                           ? "text-emerald-600 dark:text-emerald-400"
                           : "text-red-600 dark:text-red-400"
-                      }`}
+                        }`}
                     >
                       {result.ai_pipeline_result?.risk_category ?? "LOW"}
                     </span>
@@ -266,10 +320,10 @@ export function AIDocumentVerifier() {
                     </span>
                   </div>
                   <div className="space-y-1 text-[11px] text-muted-foreground">
-                    <div>✓ EasyOCR: Text spatial confidence high</div>
-                    <div>✓ LayoutLMv3: Document layout valid (Indian Govt format)</div>
-                    <div>✓ spaCy NER: Entities extracted & cross-verified</div>
-                    <div>✓ Anomaly LOF / SVM: Outlier score within acceptable range</div>
+                    <div>EasyOCR: text spatial confidence high</div>
+                    <div>LayoutLMv3: document layout valid for government formats</div>
+                    <div>spaCy NER: entities extracted and cross-checked</div>
+                    <div>Anomaly detection: outlier score within acceptable range</div>
                   </div>
                 </div>
 

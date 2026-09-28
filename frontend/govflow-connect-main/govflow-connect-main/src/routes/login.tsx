@@ -40,9 +40,9 @@ export const Route = createFileRoute("/login")({
 function LoginPage() {
   const navigate = useNavigate();
   const { signIn } = useGovFlow();
-  const [email, setEmail] = useState("admin@govflow.in");
-  const [password, setPassword] = useState("Admin@123");
-  const [mobile, setMobile] = useState("9876543210");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [mobile, setMobile] = useState("");
   const [role, setRole] = useState<Role>("Admin");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -60,9 +60,9 @@ function LoginPage() {
         signIn({
           name: authRes.user.full_name,
           email: authRes.user.email,
-          mobile: authRes.user.phone || "+91 98XXXXXX21",
+          mobile: authRes.user.phone || "",
           role: authRes.user.role === "citizen" ? "Citizen" : authRes.user.role === "admin" ? "Admin" : authRes.user.role === "officer" ? "Department Officer" : authRes.user.role === "developer" ? "Developer" : authRes.user.role === "auditor" ? "Auditor" : "Operator",
-          department: "Inter-Governmental Mesh",
+          department: authRes.user.department || "GovFlow Platform",
           avatarInitial: authRes.user.full_name[0]!.toUpperCase(),
         });
         setLoading(false);
@@ -81,18 +81,14 @@ function LoginPage() {
     e.preventDefault();
     setError("");
     if (!/^\d{10}$/.test(mobile)) return setError("Enter a valid 10-digit mobile number.");
-    setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-      toast.success(`OTP sent to +91 ${mobile}`);
-      navigate({ to: "/otp", search: { mobile, role } });
-    }, 700);
+    setError("Mobile OTP sign-in is unavailable because backend authentication does not provide an OTP endpoint. Use email and password.");
   };
 
   return (
     <AuthLayout
       title="Sign in to GovFlow"
       subtitle="Secure sign in for Admin, Department Officer, Developer, Operator and Auditor roles."
+      variant="staff"
     >
       <Tabs defaultValue="email">
         <TabsList className="grid w-full grid-cols-2">
@@ -183,9 +179,9 @@ function LoginPage() {
       </Tabs>
 
       <p className="mt-6 text-sm text-muted-foreground">
-        New to GovFlow?{" "}
-        <Link to="/signup" className="font-semibold text-primary">
-          Create an account
+        New citizen?{" "}
+        <Link to="/citizen/register" className="font-semibold text-primary">
+          Create a citizen account
         </Link>
       </p>
       <p className="mt-2 text-sm text-muted-foreground">

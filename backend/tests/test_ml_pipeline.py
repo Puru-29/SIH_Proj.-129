@@ -1,12 +1,18 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add backend directory to sys.path
 backend_path = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(backend_path))
 
 from fastapi.testclient import TestClient
 from app.main import app
+from app.api.deps import require_authenticated_user
+from app.database import SessionLocal
+from app.models.consent import DataShareConsent
+from app.models.user import User, UserRole
 from app.ml import (
     easyocr_engine,
     layoutlm_engine,
@@ -188,9 +194,22 @@ def test_anomaly_detection_engine():
     print("[PASS] One-Class SVM & Local Outlier Factor (LOF) engine passed.")
 
 
-def test_fastapi_endpoints():
+def test_fastapi_endpoints(monkeypatch):
     print("Testing FastAPI API Endpoints...")
     client = TestClient(app)
+    api_user = User(
+        id=1,
+        full_name="Test System Administrator",
+        email="admin@example.test",
+        role=UserRole.ADMIN,
+        hashed_password="unused",
+        is_active=True,
+    )
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        require_authenticated_user,
+        lambda: api_user,
+    )
 
     # Health check
     h_res = client.get("/health")
@@ -217,6 +236,104 @@ def test_fastapi_endpoints():
     bert_res = client.post("/api/v1/ml/classify/distilbert", json={"text": "Applying for new driving license and RTO vehicle registration"})
     assert bert_res.status_code == 200
     assert bert_res.json()["top_category"] == "Transport & Motor Vehicles"
+
+
+def test_interoperability_real_features(monkeypatch):
+    client = TestClient(app)
+    db = SessionLocal()
+    try:
+        latest_consent = (
+            db.query(DataShareConsent)
+            .order_by(DataShareConsent.created_at.desc())
+            .first()
+        )
+        assert latest_consent is not None
+        citizen = latest_consent.citizen
+    finally:
+        db.close()
+    api_user = User(
+        id=1,
+        full_name="Test System Administrator",
+        email="admin@example.test",
+        role=UserRole.ADMIN,
+        hashed_password="unused",
+        is_active=True,
+    )
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        require_authenticated_user,
+        lambda: api_user,
+    )
+    mapping_res = client.post(
+        "/api/v1/interoperability/data-mapping/test",
+        json={
+            "source_system": "REVENUE",
+            "sample_data": {
+                "full_name": "Aarav Patil",
+                "dob": "15/08/2003",
+                "annual_income": 420000,
+                "income_certificate_no": "INC-2026-0182",
+            },
+        },
+    )
+    assert mapping_res.status_code == 200
+    payload = mapping_res.json()
+    assert payload["normalized"]["name"] == "Aarav Patil"
+    assert payload["normalized"]["dateOfBirth"] == "2003-08-15"
+    assert payload["normalized"]["recordId"] == "INC-2026-0182"
+
+    citizen_user = User(
+        id=citizen.id,
+        full_name=citizen.full_name,
+        email=citizen.email,
+        role=UserRole.CITIZEN,
+        role_id=citizen.role_id,
+        hashed_password=citizen.hashed_password,
+        is_active=True,
+    )
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        require_authenticated_user,
+        lambda: citizen_user,
+    )
+
+    consents_res = client.get("/api/v1/consents")
+    assert consents_res.status_code == 200
+    consent_id = consents_res.json()[0]["id"]
+
+    status_res = client.post(
+        f"/api/v1/consents/{consent_id}/status",
+        json={"status": "denied"},
+    )
+    assert status_res.status_code == 200
+    assert status_res.json()["status"] == "denied"
+
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        require_authenticated_user,
+        lambda: api_user,
+    )
+    exception_res = client.post(
+        "/api/v1/interoperability/exceptions",
+        json={
+            "application_id": "SCH-10291",
+            "system": "Revenue",
+            "category": "DATA_VALIDATION_FAILED",
+            "message": "DOB format invalid",
+            "severity": "high",
+            "details": {"field": "date_of_birth", "expected": "YYYY-MM-DD", "received": "15/08/2003"},
+        },
+    )
+    assert exception_res.status_code == 200
+    exc = exception_res.json()
+    assert exc["status"] == "open"
+
+    resolve_res = client.patch(
+        f"/api/v1/interoperability/exceptions/{exc['id']}",
+        json={"status": "resolved"},
+    )
+    assert resolve_res.status_code == 200
+    assert resolve_res.json()["status"] == "resolved"
 
     # Risk Assessment endpoint (XGBoost)
     risk_res = client.post("/api/v1/ml/risk-assessment?engine=xgboost", json={

@@ -24,6 +24,7 @@ class ApplicationCreate(BaseModel):
     remarks: str | None = None
     location: str | None = None
     form_data: dict | None = None
+    verified_records: dict[str, str] | None = None
     consent: bool = False
 
 
@@ -91,4 +92,3 @@ class FullApplicationSubmissionResponse(BaseModel):
     document_id: int | None = None
     verification_result: dict | None = None
     message: str
-

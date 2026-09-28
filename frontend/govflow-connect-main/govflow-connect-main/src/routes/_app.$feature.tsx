@@ -1,5 +1,5 @@
 import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Activity,
   ArrowRight,
@@ -21,6 +21,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader, StatusPill, Surface, HealthPill } from "@/components/govflow/bits";
+import { AIDocumentVerifier } from "@/components/govflow/ai-document-verifier";
 import {
   APPLICATIONS,
   AUDIT_LOGS,
@@ -48,97 +49,133 @@ export const Route = createFileRoute("/_app/$feature")({
 
 function FeatureRoute() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  return pathname.split("/").filter(Boolean).length > 1 ? <Outlet /> : <FeaturePage />;
+  const { feature } = Route.useParams();
+  return pathname.split("/").filter(Boolean).length > 1 ? (
+    <Outlet />
+  ) : (
+    <FeaturePage key={feature ?? "workspace"} />
+  );
 }
 
-const META: Record<string, { title: string; description: string; icon: typeof Activity }> = {
+const META: Record<
+  string,
+  { title: string; description: string; icon: typeof Activity; eyebrow?: string }
+> = {
   services: {
     title: "Services",
     description: "Manage citizen services and their connected workflows.",
     icon: Landmark,
+    eyebrow: "Service Registry",
   },
   workflows: {
     title: "Workflows",
     description: "Monitor and operate cross-department service orchestration.",
     icon: GitBranch,
+    eyebrow: "Workflow Orchestration",
   },
   applications: {
     title: "Applications",
     description: "Track citizen applications across every processing stage.",
     icon: FileStack,
+    eyebrow: "Application Track",
   },
   departments: {
     title: "Departments",
     description: "View department ownership, service coverage and system health.",
     icon: Building2,
+    eyebrow: "Department View",
   },
   integrations: {
     title: "Integrations",
     description: "Operate the systems connected to the GovFlow network.",
     icon: Boxes,
+    eyebrow: "Connected Systems",
   },
   "data-mapping": {
     title: "Data Mapping",
     description: "Review how fields move between connected government systems.",
     icon: Shuffle,
+    eyebrow: "Schema Mapping",
   },
   consent: {
     title: "Consent Management",
     description: "Review and manage citizen data-sharing permissions.",
     icon: ShieldCheck,
+    eyebrow: "Consent Controls",
   },
   monitoring: {
     title: "Monitoring",
     description: "Observe API health, response time and platform reliability.",
     icon: Activity,
+    eyebrow: "Operations Monitor",
   },
   exceptions: {
     title: "Exceptions",
     description: "Recover failed workflow stages and escalate operational issues.",
     icon: TriangleAlert,
+    eyebrow: "Operations Console",
   },
   "audit-logs": {
     title: "Audit Logs",
     description: "Trace every access, workflow change and system event.",
     icon: FileText,
+    eyebrow: "Compliance Trail",
   },
   reports: {
     title: "Reports",
     description: "Review operational performance across services and departments.",
     icon: Gauge,
+    eyebrow: "Performance Reports",
   },
   users: {
     title: "Users",
     description: "Manage platform access for officers and operators.",
     icon: Users,
+    eyebrow: "Access Control",
   },
   settings: {
-    title: "Settings",
-    description: "Configure the workspace and operational preferences.",
+    title: "Profile / Settings",
+    description: "Review account details and adjust workspace preferences.",
     icon: Settings,
+    eyebrow: "Account Controls",
+  },
+  "ai-document-verification": {
+    title: "AI Document Verification",
+    description: "Verify identity, document, and fraud signals across connected government systems.",
+    icon: ShieldCheck,
+    eyebrow: "Trust Verification",
   },
   notifications: {
     title: "Notifications",
     description: "Review platform alerts and workflow updates.",
     icon: TriangleAlert,
+    eyebrow: "Alert Center",
   },
   profile: {
     title: "Profile",
     description: "Review your GovFlow account and access details.",
     icon: Users,
+    eyebrow: "Identity & Access",
   },
 };
 
 function FeaturePage() {
   const { feature } = Route.useParams();
-  const meta = META[feature] ?? {
-    title: "Workspace",
-    description: "GovFlow workspace",
-    icon: Activity,
-  };
+  const meta: { title: string; description: string; icon: typeof Activity; eyebrow?: string } =
+    META[feature] ?? {
+      title: "Workspace",
+      description: "GovFlow workspace",
+      icon: Activity,
+      eyebrow: "GovFlow Workspace",
+    };
   const Icon = meta.icon;
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    setQuery("");
+    setNotice("");
+  }, [feature]);
   const {
     exceptions,
     updateException,
@@ -333,6 +370,10 @@ function FeaturePage() {
         lastUpdated={lastUpdated}
       />
     );
+
+  if (feature === "ai-document-verification") {
+    return <AIDocumentVerifier />;
+  }
 
   if (feature === "notifications") {
     const rows = notifications.filter((item) =>
@@ -539,7 +580,7 @@ function FeatureFrame({
   action,
   children,
 }: {
-  meta: { title: string; description: string; icon: typeof Activity };
+  meta: { title: string; description: string; icon: typeof Activity; eyebrow?: string };
   query: string;
   setQuery: (value: string) => void;
   notice: string;
@@ -550,14 +591,15 @@ function FeatureFrame({
   return (
     <>
       <PageHeader
-        eyebrow="GovFlow Workspace"
+        eyebrow={meta.eyebrow ?? "GovFlow Workspace"}
         title={meta.title}
         subtitle={meta.description}
         actions={action}
       />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Icon className="size-4 text-primary" /> Live workspace
+          <Icon className="size-4 text-primary" />
+          <span>{meta.eyebrow ? `${meta.eyebrow} workspace` : "Live workspace"}</span>
         </div>
         <div className="relative w-full sm:w-auto">
           <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />

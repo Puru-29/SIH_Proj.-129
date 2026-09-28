@@ -13,7 +13,7 @@ Populates SQLite database (sih26129.db) with realistic Indian e-Governance mesh 
 
 import sys
 from datetime import datetime, timedelta, timezone
-from app.database import SessionLocal, Base, engine
+from app.database import SessionLocal
 from app.models.user import User, UserRole
 from app.models.department import Department
 from app.models.platform import DigitalPlatform, PlatformStatus
@@ -26,8 +26,7 @@ from app.core.security import hash_password
 
 
 def seed_database(force: bool = False):
-    print("Ensuring database tables exist...")
-    Base.metadata.create_all(bind=engine)
+    print("Seeding development records into the migrated database...")
     db = SessionLocal()
 
     try:
@@ -274,6 +273,7 @@ def seed_database(force: bool = False):
                     reference_id=ref_id,
                     citizen_id=cit_id,
                     service_id=s_id,
+                    department_id=db.query(Service).filter(Service.id == s_id).one().department_id,
                     status=st,
                     remarks=rem,
                 )
@@ -301,6 +301,13 @@ def seed_database(force: bool = False):
                     source_platform_id=src_id,
                     target_platform_id=tgt_id,
                     citizen_id=cit_id,
+                    source_department_id=db.query(DigitalPlatform).filter(
+                        DigitalPlatform.id == src_id
+                    ).one().department_id,
+                    requesting_department_id=db.query(DigitalPlatform).filter(
+                        DigitalPlatform.id == tgt_id
+                    ).one().department_id,
+                    requested_data=purp,
                     expires_at=datetime.now(timezone.utc) + timedelta(days=days),
                 )
             )
@@ -378,6 +385,8 @@ def seed_database(force: bool = False):
         ]
         db.add_all(logs)
 
+        from app.services.service_config import ensure_service_catalog
+        ensure_service_catalog(db)
         db.commit()
         print(f"Database seeded successfully with {len(app_objects)} applications, {len(c_objects)} consents, and {len(citizen_users)} citizens!")
 

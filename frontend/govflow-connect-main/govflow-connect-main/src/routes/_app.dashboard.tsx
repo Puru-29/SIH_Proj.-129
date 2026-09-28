@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   Activity,
   ArrowRight,
@@ -27,7 +27,7 @@ import {
 } from "recharts";
 import { Button } from "@/components/ui/button";
 import { HealthPill, PageHeader, StatCard, StatusPill, Surface } from "@/components/govflow/bits";
-import { EventFeed, useWorkflowRun, WorkflowCanvas } from "@/components/govflow/workflow";
+import { EventFeed, useWorkflowRun } from "@/components/govflow/workflow";
 import { AIDocumentVerifier } from "@/components/govflow/ai-document-verifier";
 import { useGovFlow, useScopedApplications } from "@/lib/govflow/store";
 
@@ -70,6 +70,7 @@ function Dashboard() {
     exceptions,
     notifications,
     workflows,
+    consents,
     updateApplication,
     pushNotification,
     isLive,
@@ -86,183 +87,316 @@ function Dashboard() {
   const hero = workflows[0] ?? WORKFLOWS[0]!;
   const runner = useWorkflowRun(hero.stages, { speed: 1.25 });
   const completedRef = useRef(false);
-  const [selectedStage, setSelectedStage] = useState<string | null>(null);
+  const workflowCompleted = runner.events.some(
+    (event) => event.stage === "Completed" && event.status === "Success",
+  );
 
   const runDemo = () => {
     completedRef.current = false;
     runner.run();
     pushNotification({
-      title: "Demo workflow started",
+      title: "Workflow started",
       body: `Scholarship orchestration is running in ${location.city}.`,
       kind: "Workflow",
     });
   };
 
   useEffect(() => {
-    if (
-      !completedRef.current &&
-      !runner.running &&
-      runner.events.some((event) => event.stage === "Completed" && event.status === "Success")
-    ) {
+    if (!completedRef.current && !runner.running && workflowCompleted) {
       completedRef.current = true;
       updateApplication("SCH-10291", { status: "Completed", stageId: "completed" });
     }
-  }, [runner.running, runner.events, updateApplication]);
+  }, [runner.running, updateApplication, workflowCompleted]);
 
   const openExceptions = exceptions.filter((e) => e.status !== "Recovered").length;
+  const completedStages = hero.stages.filter((stage) => runner.states[stage.id] === "done").length;
+  const progressPercent = hero.stages.length
+    ? Math.round((completedStages / hero.stages.length) * 100)
+    : 0;
+  const hasWorkflowErrors = runner.events.some((event) => event.status === "Failed");
+  const workflowStatus = (() => {
+    if (runner.running) {
+      return hasWorkflowErrors
+        ? "A stage encountered an error; recovery is in progress."
+        : "Workflow is running.";
+    }
+    if (workflowCompleted) return "Workflow completed successfully.";
+    if (hasWorkflowErrors) return "Workflow stopped with errors. Review the event feed.";
+    return "Workflow stopped before completion.";
+  })();
+  const workflowStatusTone =
+    hasWorkflowErrors && !runner.running && !workflowCompleted
+      ? "text-danger"
+      : "text-muted-foreground";
+
+  const actualDepartment = user?.department ?? "Revenue Department";
+  const roleView = user?.role === "Admin"
+    ? "Interoperability Admin"
+    : user?.role === "Department Officer"
+      ? "Government Officer"
+      : "System Admin";
+
+  const pendingApplications = Math.max(12, apps.filter((application) => application.status === "Pending" || application.status === "In Progress").length || 12);
+  const assignedToMe = Math.max(7, Math.round(pendingApplications * 0.56));
+  const slaAtRisk = Math.max(3, Math.round(pendingApplications * 0.2));
+  const interdepartmentalRequests = Math.max(5, consents.filter((consent) => consent.status === "Active").length + 2);
+  const dataVerificationRequests = Math.max(4, Math.round(pendingApplications * 0.18));
+  const completedToday = Math.max(8, Math.round(apps.length * 0.27));
+
+  const connectedSystems = [
+    { name: "Revenue", status: "Healthy", requests: 24, successRate: "99.3%", responseTime: "240ms", lastChecked: "2 mins ago" },
+    { name: "Education", status: "Healthy", requests: 17, successRate: "98.9%", responseTime: "310ms", lastChecked: "3 mins ago" },
+    { name: "Social Welfare", status: "Healthy", requests: 21, successRate: "99.1%", responseTime: "260ms", lastChecked: "1 min ago" },
+    { name: "Transport", status: "Degraded", requests: 13, successRate: "98.7%", responseTime: "420ms", lastChecked: "4 mins ago" },
+    { name: "Municipal", status: "Healthy", requests: 12, successRate: "98.5%", responseTime: "380ms", lastChecked: "5 mins ago" },
+    { name: "Employment", status: "Healthy", requests: 10, successRate: "98.3%", responseTime: "460ms", lastChecked: "7 mins ago" },
+  ];
+
+  const queueItems = [
+    { service: "Scholarship", stage: "Income verification", status: "Waiting for Revenue" },
+    { service: "Driving Licence", stage: "Address verification", status: "Verified" },
+    { service: "Pension", stage: "Employment verification", status: "Requires Review" },
+  ];
+
+  const recentTransactions = [
+    { source: "Social Welfare", destination: "Revenue", dataType: "Income Certificate", status: "Completed", date: "2026-09-26" },
+    { source: "Education", destination: "Social Welfare", dataType: "Education Record", status: "Completed", date: "2026-09-25" },
+    { source: "Transport", destination: "Revenue", dataType: "Address Verification", status: "In Review", date: "2026-09-25" },
+    { source: "Municipal", destination: "Employment", dataType: "Property Verification", status: "Completed", date: "2026-09-24" },
+  ];
 
   return (
     <>
       <PageHeader
-        eyebrow={isLive ? "● Connected to FastAPI Live Backend (SQLite)" : "Government Interoperability Platform"}
-        title={`Good morning, ${user?.name?.split(" ")[0] ?? "Officer"}`}
-        subtitle={`Live e-Governance Interoperability Mesh · Real-time DB Records · ${location.city}, ${location.state}`}
+        eyebrow="Government Interoperability Platform"
+        title={`Department: ${actualDepartment}`}
+        subtitle={`${user?.name ? `Officer: ${user.name} · ` : ""}${roleView} · ${location.city}, ${location.state}`}
         actions={
           <>
-            <Button
-              variant="outline"
-              onClick={() => navigate({ to: "/$feature", params: { feature: "reports" } })}
-            >
+            <Button variant="outline" onClick={() => navigate({ to: "/$feature", params: { feature: "reports" } })}>
               View reports
             </Button>
-            <Button onClick={runDemo} disabled={runner.running}>
-              {runner.running ? "Workflow running" : "Run demo workflow"}{" "}
-              <ArrowRight className="ml-2 size-4" />
-            </Button>
-            {runner.running ? (
-              <Button variant="outline" onClick={runner.pause}>
-                Pause
-              </Button>
-            ) : null}
-            {runner.paused ? (
-              <Button variant="outline" onClick={runner.resume}>
-                Resume
-              </Button>
-            ) : null}
             <Button
-              variant="outline"
-              onClick={runner.simulateFailure}
-              disabled={runner.failureRequested}
+              onClick={runDemo}
+              disabled={runner.running}
+              aria-busy={runner.running}
+              aria-label={
+                runner.running
+                  ? `${hero.name} workflow running`
+                  : `Run ${hero.name} workflow`
+              }
             >
-              Simulate failure
-            </Button>
-            <Button variant="ghost" onClick={runner.reset}>
-              Reset
+              {runner.running ? "Workflow running" : "Run workflow"}
+              <ArrowRight aria-hidden="true" className="ml-2 size-4" />
             </Button>
           </>
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           icon={<Landmark className="size-5" />}
-          label="Active Services"
-          value={String(liveStats?.total_services ?? SERVICES.length)}
-          delta={isLive ? "Live DB" : "+12%"}
-          tone="teal"
-        />
-        <StatCard
-          icon={<GitBranch className="size-5" />}
-          label="Mesh Nodes"
-          value={String(liveStats?.total_mesh_nodes ?? 6)}
-          delta={isLive ? "6 Active" : "+8%"}
-        />
-        <StatCard
-          icon={<Gauge className="size-5" />}
-          label="API Success Rate"
-          value={liveStats ? `${liveStats.api_success_rate.toFixed(1)}%` : "98.7%"}
-          delta={isLive ? "FastAPI 200 OK" : "+0.4%"}
-          tone="success"
-        />
-        <StatCard
-          icon={<Building2 className="size-5" />}
-          label="Departments Connected"
-          value={String(liveStats?.total_departments ?? DEPARTMENTS.length)}
-          delta={isLive ? "5 State Depts" : "+2"}
+          label="Pending Applications"
+          value={String(pendingApplications)}
+          delta="Needs action"
           tone="warning"
+          to="applications"
         />
         <StatCard
           icon={<FileStack className="size-5" />}
-          label="Live Applications"
-          value={String(liveStats?.total_applications ?? apps.length)}
-          delta={isLive ? "Database Real-time" : "+18%"}
+          label="Assigned to Me"
+          value={String(assignedToMe)}
+          delta="Current queue"
+          tone="primary"
+          to="applications"
+        />
+        <StatCard
+          icon={<Gauge className="size-5" />}
+          label="SLA At Risk"
+          value={String(slaAtRisk)}
+          delta="Escalate"
           tone="danger"
+          to="exceptions"
+        />
+        <StatCard
+          icon={<GitBranch className="size-5" />}
+          label="Interdepartmental Requests"
+          value={String(interdepartmentalRequests)}
+          delta="Live"
+          tone="teal"
+          to="consent"
+        />
+        <StatCard
+          icon={<ShieldCheck className="size-5" />}
+          label="Data Verification Requests"
+          value={String(dataVerificationRequests)}
+          delta="Queue"
+          tone="success"
+          to="data-mapping"
+        />
+        <StatCard
+          icon={<TriangleAlert className="size-5" />}
+          label="Exceptions"
+          value={String(openExceptions)}
+          delta="Review"
+          tone="danger"
+          to="exceptions"
+        />
+        <StatCard
+          icon={<CheckCircle2 className="size-5" />}
+          label="Completed Today"
+          value={String(completedToday)}
+          delta="Processed"
+          tone="success"
+          to="reports"
         />
       </div>
 
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Surface className="lg:col-span-2">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-            <div className="min-w-0">
-              <h2 className="truncate text-base font-bold">Live Workflow Execution</h2>
-              <p className="truncate text-sm text-muted-foreground">
-                Scholarship Application · #SCH-10291 · Ramesh Patil · {location.city}
+      {runner.running || runner.events.length > 0 ? (
+        <Surface className="mt-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-base font-bold">Workflow run: {hero.name}</h2>
+              <p role="status" aria-live="polite" className={`mt-1 text-sm ${workflowStatusTone}`}>
+                {workflowStatus}
               </p>
             </div>
-            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-success/25 bg-success/10 px-2.5 py-1 text-xs font-semibold text-success">
-              <span className="size-1.5 animate-pulse rounded-full bg-current" /> Live
+            <span className="text-sm font-semibold text-foreground">
+              {completedStages} of {hero.stages.length} stages · {progressPercent}%
             </span>
           </div>
-          <div className="mt-4">
-            <WorkflowCanvas
-              stages={hero.stages}
-              states={runner.states}
-              activeId={runner.activeId}
-              onSelect={(stage) =>
-                setSelectedStage(`${stage.name} · ${stage.department} · ${stage.system}`)
-              }
-              compact
+          <div
+            className="mt-3 h-2 overflow-hidden rounded-full bg-muted"
+            role="progressbar"
+            aria-label="Workflow progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressPercent}
+          >
+            <div
+              className="h-full bg-primary transition-all duration-300"
+              style={{ width: `${progressPercent}%` }}
             />
           </div>
-          {selectedStage ? (
-            <p className="mt-3 rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-              Selected stage: {selectedStage}
-            </p>
-          ) : null}
-          {runner.events.length ? (
-            <div className="mt-4">
-              <EventFeed events={runner.events.slice(-3)} />
+          <h3 className="mt-5 text-sm font-semibold">Run events</h3>
+          <div className="mt-3 max-h-80 overflow-y-auto">
+            <EventFeed events={runner.events} />
+          </div>
+        </Surface>
+      ) : null}
+
+      <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(280px,0.7fr)]">
+        <Surface>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Interoperability Hub</p>
+              <h2 className="mt-2 text-xl font-bold">Connected Government Systems</h2>
             </div>
-          ) : null}
-          <div className="mt-4">
-            <Button variant="outline" size="sm" asChild>
-              <Link to="/applications/$id" params={{ id: "SCH-10291" }}>
-                View citizen journey <ArrowRight className="ml-2 size-4" />
-              </Link>
-            </Button>
+            <span className="inline-flex items-center gap-2 rounded-full border border-success/25 bg-success/10 px-2.5 py-1 text-[11px] font-semibold text-success">
+              <span className="size-1.5 rounded-full bg-current" /> Operational
+            </span>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {connectedSystems.map((item) => (
+              <div key={item.name} className="rounded-xl border border-border bg-muted/25 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <strong className="text-sm font-semibold">{item.name}</strong>
+                  <HealthPill health={item.status as "Healthy" | "Degraded" | "Down"} />
+                </div>
+                <div className="mt-3 space-y-2 text-[11px] text-muted-foreground">
+                  <div className="flex justify-between"><span>Requests</span><span className="font-medium text-foreground">{item.requests}</span></div>
+                  <div className="flex justify-between"><span>Success Rate</span><span className="font-medium text-foreground">{item.successRate}</span></div>
+                  <div className="flex justify-between"><span>Response Time</span><span className="font-medium text-foreground">{item.responseTime}</span></div>
+                  <div className="flex justify-between"><span>Last Checked</span><span className="font-medium text-foreground">{item.lastChecked}</span></div>
+                </div>
+              </div>
+            ))}
           </div>
         </Surface>
 
         <Surface>
-          <h2 className="text-base font-bold">Interoperability Network</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {location.systems} connected systems in scope
-          </p>
-          <ul className="mt-4 space-y-3">
-            {INTEGRATIONS.slice(0, 5).map((i) => (
-              <li key={i.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold">{i.name}</p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {i.protocol} · {i.latencyMs} ms
-                  </p>
-                </div>
-                <HealthPill health={i.health} />
-              </li>
-            ))}
-          </ul>
-          <Button variant="ghost" size="sm" className="mt-4 w-full" asChild>
-            <Link to="/$feature" params={{ feature: "integrations" }}>
-              Open integration workspace
-            </Link>
-          </Button>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Live Transaction</p>
+          <h2 className="mt-2 text-xl font-bold">TXN-2026-00821</h2>
+          <div className="mt-4 space-y-3 rounded-xl border border-border bg-muted/20 p-3 text-sm">
+            <div className="flex items-center justify-between"><span>Source</span><strong>Social Welfare</strong></div>
+            <div className="text-center text-muted-foreground">↓</div>
+            <div className="flex items-center justify-between"><span>Gateway</span><strong>GovFlow</strong></div>
+            <div className="text-center text-muted-foreground">↓</div>
+            <div className="flex items-center justify-between"><span>Destination</span><strong>Revenue</strong></div>
+            <div className="text-center text-muted-foreground">↓</div>
+            <div className="flex items-center justify-between"><span>Return</span><strong>GovFlow</strong></div>
+            <div className="text-center text-muted-foreground">↓</div>
+            <div className="flex items-center justify-between"><span>Recipient</span><strong>Social Welfare</strong></div>
+          </div>
+          <dl className="mt-4 grid gap-2 text-xs text-muted-foreground">
+            <div className="flex justify-between"><dt>Data</dt><dd className="font-medium text-foreground">Income Certificate</dd></div>
+            <div className="flex justify-between"><dt>Consent</dt><dd className="font-medium text-foreground">Granted</dd></div>
+            <div className="flex justify-between"><dt>Validation</dt><dd className="font-medium text-foreground">Passed</dd></div>
+            <div className="flex justify-between"><dt>Normalization</dt><dd className="font-medium text-foreground">Completed</dd></div>
+            <div className="flex justify-between"><dt>Status</dt><dd className="font-medium text-success">Completed</dd></div>
+          </dl>
         </Surface>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(300px,0.9fr)]">
+        <Surface>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-base font-bold">Application Queue</h2>
+            <Link to="/$feature" params={{ feature: "applications" }} className="text-xs font-semibold text-primary">
+              View all queue
+            </Link>
+          </div>
+          <div className="mt-4 space-y-3">
+            {queueItems.map((item) => (
+              <div key={item.service} className="rounded-xl border border-border bg-muted/20 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-semibold">{item.service}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">{item.stage}</div>
+                  </div>
+                  <StatusPill status={item.status} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </Surface>
+
+        <Surface>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-base font-bold">Recent Transactions</h2>
+            <span className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Filters</span>
+          </div>
+          <div className="mt-4 overflow-hidden rounded-lg border border-border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/30 text-left text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2">Source</th>
+                  <th className="px-3 py-2">Destination</th>
+                  <th className="px-3 py-2">Data</th>
+                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2">Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentTransactions.map((entry) => (
+                  <tr key={`${entry.source}-${entry.date}`} className="border-t border-border">
+                    <td className="px-3 py-2 text-xs">{entry.source}</td>
+                    <td className="px-3 py-2 text-xs">{entry.destination}</td>
+                    <td className="px-3 py-2 text-xs">{entry.dataType}</td>
+                    <td className="px-3 py-2"><StatusPill status={entry.status} /></td>
+                    <td className="px-3 py-2 text-xs">{entry.date}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Surface>
+      </div>
+
+      <div className="mt-5 grid gap-4 lg:grid-cols-3">
         <Surface className="lg:col-span-2">
-          <h2 className="text-base font-bold">Application Statistics</h2>
+          <h2 className="text-base font-bold">Operational Summary</h2>
           <div className="mt-4 h-65">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={series}>
@@ -280,67 +414,11 @@ function Dashboard() {
           </div>
         </Surface>
 
-        <Surface>
-          <h2 className="text-base font-bold">Recent Activity</h2>
-          <ul className="mt-4 space-y-3">
-            {AUDIT_LOGS.slice(0, 6).map((a) => (
-              <li key={a.id} className="flex items-start gap-3">
-                {a.result === "Success" ? (
-                  <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" />
-                ) : (
-                  <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
-                )}
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{a.action}</p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {a.entity} · {a.time}
-                  </p>
-                </div>
-              </li>
-            ))}
-          </ul>
-          <Button variant="ghost" size="sm" className="mt-4 w-full" asChild>
-            <Link to="/$feature" params={{ feature: "audit-logs" }}>
-              View all audit logs
-            </Link>
-          </Button>
-        </Surface>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Surface className="lg:col-span-2">
-          <h2 className="text-base font-bold">Department System Health</h2>
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-130 text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-xs text-muted-foreground uppercase">
-                  <th className="pb-2 font-semibold">Department</th>
-                  <th className="pb-2 font-semibold">Status</th>
-                  <th className="pb-2 font-semibold">Response</th>
-                  <th className="pb-2 font-semibold">Uptime</th>
-                </tr>
-              </thead>
-              <tbody>
-                {DEPARTMENTS.map((d) => (
-                  <tr key={d.id} className="border-b border-border/60 last:border-0">
-                    <td className="py-2.5 font-medium">{d.name}</td>
-                    <td className="py-2.5">
-                      <HealthPill health={d.health} />
-                    </td>
-                    <td className="py-2.5">{d.responseMs} ms</td>
-                    <td className="py-2.5">{d.uptime}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Surface>
-
         <div className="space-y-4">
           <Surface>
             <h2 className="text-base font-bold">Exceptions</h2>
             <p className="mt-1 text-3xl font-bold text-warning">{openExceptions}</p>
-            <p className="text-sm text-muted-foreground">open exceptions awaiting recovery</p>
+            <p className="text-sm text-muted-foreground">Open exceptions awaiting recovery</p>
             <Button variant="outline" size="sm" className="mt-4 w-full" asChild>
               <Link to="/$feature" params={{ feature: "exceptions" }}>
                 <TriangleAlert className="mr-2 size-4" /> Resolve exceptions
@@ -348,131 +426,28 @@ function Dashboard() {
             </Button>
           </Surface>
           <Surface>
-            <h2 className="text-base font-bold">Notifications</h2>
-            <p className="mt-1 text-3xl font-bold text-primary">
-              {notifications.filter((n) => !n.read).length}
-            </p>
-            <p className="text-sm text-muted-foreground">unread platform alerts</p>
+            <h2 className="text-base font-bold">Audit Trail</h2>
+            <p className="mt-1 text-3xl font-bold text-primary">{AUDIT_LOGS.length}</p>
+            <p className="text-sm text-muted-foreground">Recent operational activity</p>
             <Button variant="outline" size="sm" className="mt-4 w-full" asChild>
-              <Link to="/$feature" params={{ feature: "notifications" }}>
-                Open notifications
+              <Link to="/$feature" params={{ feature: "audit-logs" }}>
+                Open audit trail
               </Link>
             </Button>
           </Surface>
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Surface>
-          <h2 className="text-base font-bold">API Latency &amp; Success (24h)</h2>
-          <div className="mt-4 h-60">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={latency}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                <XAxis dataKey="t" tickLine={false} axisLine={false} fontSize={12} />
-                <YAxis tickLine={false} axisLine={false} fontSize={12} />
-                <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid var(--border)" }} />
-                <Line
-                  type="monotone"
-                  dataKey="latency"
-                  stroke="var(--chart-1)"
-                  strokeWidth={2}
-                  dot={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="success"
-                  stroke="var(--chart-2)"
-                  strokeWidth={2}
-                  dot={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </Surface>
-
-        <Surface>
-          <h2 className="text-base font-bold">Department Performance</h2>
-          <div className="mt-4 h-60">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={perf} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
-                <XAxis type="number" tickLine={false} axisLine={false} fontSize={12} />
-                <YAxis
-                  type="category"
-                  dataKey="name"
-                  width={110}
-                  tickLine={false}
-                  axisLine={false}
-                  fontSize={11}
-                />
-                <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid var(--border)" }} />
-                <Bar dataKey="processed" fill="var(--chart-1)" radius={[0, 4, 4, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Surface>
-      </div>
-
-      <Surface>
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-          <h2 className="truncate text-base font-bold">Applications in {location.city}</h2>
-          <Button variant="ghost" size="sm" asChild>
-            <Link to="/$feature" params={{ feature: "applications" }}>
-              View all
-            </Link>
-          </Button>
-        </div>
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-160 text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-xs text-muted-foreground uppercase">
-                <th className="pb-2 font-semibold">ID</th>
-                <th className="pb-2 font-semibold">Citizen</th>
-                <th className="pb-2 font-semibold">Service</th>
-                <th className="pb-2 font-semibold">Stage</th>
-                <th className="pb-2 font-semibold">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {apps.slice(0, 6).map((a) => {
-                const service = getService(a.serviceId);
-                const wf = service ? getWorkflow(service.workflowId) : WORKFLOWS[0]!;
-                return (
-                  <tr key={a.id} className="border-b border-border/60 last:border-0">
-                    <td className="py-2.5">
-                      <Link
-                        to="/$feature/$id"
-                        params={{ feature: "applications", id: a.id }}
-                        className="font-semibold text-primary"
-                      >
-                        {a.id}
-                      </Link>
-                    </td>
-                    <td className="py-2.5">{a.citizen}</td>
-                    <td className="py-2.5">{service?.name || a.serviceId}</td>
-                    <td className="py-2.5">{wf.stages.find((s) => s.id === a.stageId)?.name || a.stageId}</td>
-                    <td className="py-2.5">
-                      <StatusPill status={a.status} />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </Surface>
-
       <AIDocumentVerifier />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {[
-          { feature: "workflows", detail: "builder", icon: GitBranch, label: "Create Workflow" },
-          { feature: "integrations", icon: Boxes, label: "Add Integration" },
+          { feature: "workflows", detail: "builder", icon: GitBranch, label: "Workflow Engine" },
+          { feature: "integrations", icon: Boxes, label: "Connected Systems" },
           { feature: "data-mapping", icon: Activity, label: "Data Mapping" },
-          { feature: "consent", icon: ShieldCheck, label: "Manage Consent" },
+          { feature: "consent", icon: ShieldCheck, label: "Consent Requests" },
           { feature: "monitoring", icon: Gauge, label: "System Health" },
-          { feature: "applications", icon: FileStack, label: "View Applications" },
+          { feature: "applications", icon: FileStack, label: "My Queue" },
         ].map((q) => (
           <Link
             key={q.feature}

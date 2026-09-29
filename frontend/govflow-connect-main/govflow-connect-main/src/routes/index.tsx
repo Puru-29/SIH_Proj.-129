@@ -32,12 +32,36 @@ export const Route = createFileRoute("/")({
 });
 
 const capabilities = [
-  { icon: Layers3, title: "Cross-System Data Integration", text: "Unify records from legacy and digital government systems into one connected citizen experience." },
-  { icon: ShieldCheck, title: "Consent-Based Data Sharing", text: "Validate purpose, scope and expiry before exchanging records across departments." },
-  { icon: Workflow, title: "Unified Application Tracking", text: "Follow one application across departments without losing context or re-submitting documents." },
-  { icon: Workflow, title: "Workflow Orchestration", text: "Coordinate department actions, approvals and exceptions through a single orchestration layer." },
-  { icon: Database, title: "AI Document Verification", text: "Match uploaded and existing records to reduce duplication, fraud and manual review delays." },
-  { icon: CheckCircle2, title: "Interoperability Monitoring", text: "Track system health, audit flows and consent events across the connected network." },
+  {
+    icon: Layers3,
+    title: "Cross-System Data Integration",
+    text: "Unify records from legacy and digital government systems into one connected citizen experience.",
+  },
+  {
+    icon: ShieldCheck,
+    title: "Consent-Based Data Sharing",
+    text: "Validate purpose, scope and expiry before exchanging records across departments.",
+  },
+  {
+    icon: Workflow,
+    title: "Unified Application Tracking",
+    text: "Follow one application across departments without losing context or re-submitting documents.",
+  },
+  {
+    icon: Workflow,
+    title: "Workflow Orchestration",
+    text: "Coordinate department actions, approvals and exceptions through a single orchestration layer.",
+  },
+  {
+    icon: Database,
+    title: "AI Document Verification",
+    text: "Match uploaded and existing records to reduce duplication, fraud and manual review delays.",
+  },
+  {
+    icon: CheckCircle2,
+    title: "Interoperability Monitoring",
+    text: "Track system health, audit flows and consent events across the connected network.",
+  },
 ];
 
 const problemPoints = [
@@ -72,7 +96,9 @@ function Landing() {
               <p className="text-lg font-bold leading-none tracking-tight text-foreground">
                 Gov<span className="text-primary">Flow</span>
               </p>
-              <p className="text-[11px] font-medium text-[#4b5f6f]">Government interoperability platform</p>
+              <p className="text-[11px] font-medium text-[#4b5f6f]">
+                Government interoperability platform
+              </p>
             </div>
           </div>
 
@@ -100,7 +126,9 @@ function Landing() {
               </h1>
 
               <p className="mt-6 max-w-xl text-base font-medium leading-7 text-[#475f6f] sm:text-lg">
-                GovFlow connects existing government platforms through a common interoperability layer, enabling secure data exchange, consent-based access, workflow orchestration and unified application tracking.
+                GovFlow connects existing government platforms through a common interoperability
+                layer, enabling secure data exchange, consent-based access, workflow orchestration
+                and unified application tracking.
               </p>
 
               <div className="mt-8 flex flex-wrap gap-3">
@@ -116,8 +144,12 @@ function Landing() {
               </div>
 
               <div className="mt-8 flex flex-wrap gap-3 text-xs font-medium text-[#425a6c]">
-                <span className="rounded-full border border-border bg-card px-3 py-1.5">Connected public services</span>
-                <span className="rounded-full border border-border bg-card px-3 py-1.5">Secure data exchange</span>
+                <span className="rounded-full border border-border bg-card px-3 py-1.5">
+                  Connected public services
+                </span>
+                <span className="rounded-full border border-border bg-card px-3 py-1.5">
+                  Secure data exchange
+                </span>
               </div>
             </div>
 
@@ -125,7 +157,9 @@ function Landing() {
               <div className="rounded-[24px] border border-border bg-[#F5FAF7] p-5">
                 <div className="mb-5 flex items-center justify-between">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#446075]">Architecture</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#446075]">
+                      Architecture
+                    </p>
                     <p className="mt-1 text-xl font-bold text-foreground">GovFlow Mesh</p>
                   </div>
                   <div className="rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#0d4e40]">
@@ -135,7 +169,9 @@ function Landing() {
 
                 <div className="space-y-4">
                   <div className="rounded-2xl border border-primary/20 bg-white p-3 text-center">
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Citizen</p>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
+                      Citizen
+                    </p>
                   </div>
                   <div className="flex justify-center">
                     <ArrowRight className="size-4 text-primary" />
@@ -155,7 +191,10 @@ function Landing() {
                       "Social Welfare",
                       "Employment",
                     ].map((department) => (
-                      <div key={department} className="rounded-xl border border-border bg-white px-2.5 py-2 text-center text-xs font-medium text-foreground">
+                      <div
+                        key={department}
+                        className="rounded-xl border border-border bg-white px-2.5 py-2 text-center text-xs font-medium text-foreground"
+                      >
                         {department}
                       </div>
                     ))}
@@ -168,13 +207,20 @@ function Landing() {
 
         <section className="mx-auto max-w-6xl px-4 py-16">
           <div className="mb-8 max-w-2xl">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">The Problem</p>
-            <h2 className="mt-3 text-3xl font-bold tracking-[-0.05em] text-foreground">Fragmented public service delivery slows citizens down.</h2>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">
+              The Problem
+            </p>
+            <h2 className="mt-3 text-3xl font-bold tracking-[-0.05em] text-foreground">
+              Fragmented public service delivery slows citizens down.
+            </h2>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             {problemPoints.map((point) => (
-              <div key={point} className="rounded-2xl border border-border bg-card p-4 text-sm font-medium text-foreground shadow-sm">
+              <div
+                key={point}
+                className="rounded-2xl border border-border bg-card p-4 text-sm font-medium text-foreground shadow-sm"
+              >
                 <div className="mb-3 inline-flex size-9 items-center justify-center rounded-full bg-primary/8 text-primary">
                   <CheckCircle2 className="size-4" />
                 </div>
@@ -187,8 +233,12 @@ function Landing() {
         <section className="border-y border-border bg-[#F0F6F3]">
           <div className="mx-auto max-w-6xl px-4 py-16">
             <div className="mb-8 max-w-2xl">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#0d4e40]">How GovFlow Works</p>
-              <h2 className="mt-3 text-3xl font-bold tracking-[-0.05em] text-foreground">One connected workflow from existing systems to a unified citizen journey.</h2>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#0d4e40]">
+                How GovFlow Works
+              </p>
+              <h2 className="mt-3 text-3xl font-bold tracking-[-0.05em] text-foreground">
+                One connected workflow from existing systems to a unified citizen journey.
+              </h2>
             </div>
 
             <div className="flex flex-wrap items-center justify-center gap-3">
@@ -206,13 +256,20 @@ function Landing() {
 
         <section className="mx-auto max-w-6xl px-4 py-16">
           <div className="mb-8 max-w-2xl">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#0d4e40]">Capabilities</p>
-            <h2 className="mt-3 text-3xl font-bold tracking-[-0.05em] text-foreground">Built to connect public services without replacing existing systems.</h2>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#0d4e40]">
+              Capabilities
+            </p>
+            <h2 className="mt-3 text-3xl font-bold tracking-[-0.05em] text-foreground">
+              Built to connect public services without replacing existing systems.
+            </h2>
           </div>
 
           <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
             {capabilities.map(({ icon: Icon, title, text }) => (
-              <div key={title} className="rounded-[24px] border border-border bg-card p-5 shadow-[0_8px_24px_rgba(20,33,61,0.04)]">
+              <div
+                key={title}
+                className="rounded-[24px] border border-border bg-card p-5 shadow-[0_8px_24px_rgba(20,33,61,0.04)]"
+              >
                 <div className="mb-4 inline-flex size-12 items-center justify-center rounded-2xl bg-primary/8 text-primary">
                   <Icon className="size-5" />
                 </div>

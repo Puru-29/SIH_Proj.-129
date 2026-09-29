@@ -7,15 +7,14 @@ import { Input } from "@/components/ui/input";
 import type { GovernmentService, RecordItem } from "@/services/api";
 import {
   type MeshApplication,
-  type MeshDepartment,
   type MeshDocument,
-  type MeshNodePlatform,
   type MeshService,
   type ServiceFormField,
   type ServiceFormSchema,
   api,
 } from "@/lib/api";
 import { getApplicationServiceConfig } from "@/lib/govflow/application-config";
+import { workflowService } from "@/services/workflowService";
 
 type Props = {
   service: GovernmentService;
@@ -28,6 +27,16 @@ type Props = {
 type WizardStep = {
   id: "service" | "information" | "records" | "consent" | "documents" | "review" | "submit";
   label: string;
+};
+
+type WorkflowConsentRequirement = {
+  key: string;
+  sourceDepartment: string;
+  sourcePlatformId: number;
+  dataRequested: string;
+  requestedData: string;
+  purpose: string;
+  consentField: string;
 };
 
 const normalize = (value: string) =>
@@ -60,21 +69,6 @@ function verifiedDocumentMatch(requiredDocument: string, documents: MeshDocument
           name.includes(normalize(document.doc_type)),
       ),
   );
-}
-
-function readFileAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
-    reader.onload = () => {
-      if (typeof reader.result !== "string") {
-        reject(new Error(`Could not read ${file.name}.`));
-        return;
-      }
-      resolve(reader.result.split(",")[1] ?? "");
-    };
-    reader.readAsDataURL(file);
-  });
 }
 
 function backendServiceFor(
@@ -115,29 +109,21 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
   const [setupError, setSetupError] = useState("");
   const [submissionError, setSubmissionError] = useState("");
   const [backendService, setBackendService] = useState<MeshService | null>(null);
+  const [backendDepartment, setBackendDepartment] = useState("");
   const [formSchema, setFormSchema] = useState<ServiceFormSchema | null>(null);
+  const [consentRequirements, setConsentRequirements] = useState<WorkflowConsentRequirement[]>([]);
   const [citizen, setCitizen] = useState<Awaited<ReturnType<typeof api.getMe>>>(null);
-  const [departments, setDepartments] = useState<MeshDepartment[]>([]);
-  const [platforms, setPlatforms] = useState<MeshNodePlatform[]>([]);
   const [documents, setDocuments] = useState<MeshDocument[]>([]);
   const [formValues, setFormValues] = useState<Record<string, string | boolean>>({});
   const [selectedRecords, setSelectedRecords] = useState<Record<string, string>>({});
   const [consentDecisions, setConsentDecisions] = useState<Record<string, "allow" | "deny">>({});
-  const [consentIds, setConsentIds] = useState<Record<string, number>>({});
   const [uploadedFiles, setUploadedFiles] = useState<Record<string, File>>({});
   const [createdApplication, setCreatedApplication] = useState<MeshApplication | null>(null);
   const [exchangeResults, setExchangeResults] = useState<
     Array<{ department: string; status: string; transactionId: string }>
   >([]);
 
-  const activeConsentRequirements = useMemo(
-    () =>
-      config.consentRequirements.filter(
-        (requirement) =>
-          !requirement.whenField || formValues[requirement.whenField] === requirement.whenValue,
-      ),
-    [config.consentRequirements, formValues],
-  );
+  const activeConsentRequirements = consentRequirements;
 
   const steps = useMemo<WizardStep[]>(
     () => [
@@ -173,9 +159,10 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
 
   const visibleFields = useMemo(() => {
     const configuredFields = new Map(config.requiredInformation.map((field) => [field.id, field]));
-    const fields = formSchema?.fields.filter((field) => !field.id.startsWith("consent_")) ?? [];
+    const fields = formSchema?.fields ?? [];
     return fields
       .filter((field) => {
+        if (field.id.startsWith("consent_")) return false;
         if (field.visible_if && formValues[field.visible_if.field] !== field.visible_if.equals)
           return false;
         const metadata = configuredFields.get(field.id);
@@ -205,21 +192,68 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
           throw new Error(`The backend does not have a service entry for ${service.name}.`);
         }
         const schema = await api.getServiceFormSchema(match.id);
+        const workflowDefinitions = await workflowService.getWorkflowDefinitions(match.id);
+        const workflow = workflowDefinitions.find((item) => item.status === "active");
+        if (!workflow) {
+          throw new Error("No active backend workflow is configured for this service.");
+        }
+        const department = meshDepartments.find((item) => item.id === match.department_id);
+        if (!department) {
+          throw new Error("The service department is not configured in the backend.");
+        }
+        const requirements = workflow.steps
+          .filter((step) => step.type === "DATA_REQUEST")
+          .map((step): WorkflowConsentRequirement => {
+            const requestedData = step.action["data_requested"];
+            const requestedDataScope = step.action["consent"];
+            const consentField = step.action["consent_field"];
+            if (
+              !step.department ||
+              typeof requestedData !== "string" ||
+              typeof requestedDataScope !== "string" ||
+              typeof consentField !== "string" ||
+              !schema.fields.some((field) => field.id === consentField)
+            ) {
+              throw new Error(
+                `Workflow step ${step.name} is missing its consent or source-data configuration.`,
+              );
+            }
+            const sourceDepartment = meshDepartments.find(
+              (item) =>
+                normalize(item.name).includes(normalize(step.department!)) ||
+                normalize(step.department!).includes(normalize(item.name)),
+            );
+            const sourcePlatform = sourceDepartment
+              ? meshPlatforms.find((item) => item.department_id === sourceDepartment.id)
+              : undefined;
+            if (!sourceDepartment || !sourcePlatform) {
+              throw new Error(`No connected source system is configured for ${step.department}.`);
+            }
+            return {
+              key: step.step_id,
+              sourceDepartment: step.department,
+              sourcePlatformId: sourcePlatform.id,
+              dataRequested: requestedData,
+              requestedData: requestedDataScope,
+              purpose: `${workflow.name} eligibility verification`,
+              consentField,
+            };
+          });
         if (cancelled) return;
         setCitizen(me);
         setBackendService(match);
+        setBackendDepartment(department.name);
         setFormSchema(schema);
-        setPlatforms(meshPlatforms);
-        setDepartments(meshDepartments);
+        setConsentRequirements(requirements);
         setDocuments(citizenDocuments);
         setFormValues((current) => {
           const initial = Object.fromEntries(
-            schema.fields
-              .filter((field) => !field.id.startsWith("consent_"))
-              .map((field) => [
-                field.id,
-                fieldProfileValue(field.id, me, citizenAddress) || field.default || "",
-              ]),
+            schema.fields.map((field) => [
+              field.id,
+              field.type === "checkbox"
+                ? Boolean(field.default)
+                : fieldProfileValue(field.id, me, citizenAddress) || field.default || "",
+            ]),
           );
           return { ...initial, ...current };
         });
@@ -239,8 +273,8 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
   }, [citizenAddress, config, records, service.name]);
 
   const matchingVerifiedDocument = (name: string) => verifiedDocumentMatch(name, documents);
-  const consentPurpose = (requirement: (typeof config.consentRequirements)[number]) =>
-    `${requirement.purpose} | Data requested: ${requirement.dataRequested}`;
+  const consentPurpose = (requirement: WorkflowConsentRequirement) =>
+    `${requirement.purpose} | ${requirement.requestedData} | Data requested: ${requirement.dataRequested}`;
 
   const updateField = (field: ServiceFormField, value: string | boolean) => {
     setFormValues((current) => ({ ...current, [field.id]: value }));
@@ -271,66 +305,30 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
     });
   };
 
-  const saveConsentDecision = async (
-    requirement: (typeof config.consentRequirements)[number],
+  const saveConsentDecision = (
+    requirement: WorkflowConsentRequirement,
     decision: "allow" | "deny",
   ) => {
-    if (!citizen || !backendService) {
-      setSubmissionError("Citizen and service details must load before recording consent.");
-      return;
-    }
-    const sourceDepartment = departments.find((department) =>
-      normalize(department.name).includes(normalize(requirement.sourceDepartment)),
-    );
-    const sourcePlatform = sourceDepartment
-      ? platforms.find((platform) => platform.department_id === sourceDepartment.id)
-      : undefined;
-    const targetPlatform = platforms.find((platform) => platform.id === backendService.platform_id);
-    if (!sourcePlatform || !targetPlatform) {
-      setSubmissionError(
-        `No connected platform is configured for ${requirement.sourceDepartment} data.`,
-      );
-      return;
-    }
     setSubmissionError("");
-    try {
-      const existingConsentId = consentIds[requirement.key];
-      const consentId =
-        existingConsentId ??
-        (
-          await api.createConsent({
-            purpose: consentPurpose(requirement),
-            source_platform_id: sourcePlatform.id,
-            target_platform_id: targetPlatform.id,
-            citizen_id: citizen.id,
-            requested_data: requirement.dataRequested,
-            requested_fields: [requirement.dataRequested],
-          })
-        ).id;
-      setConsentIds((current) => ({ ...current, [requirement.key]: consentId }));
-      const decidedConsent =
-        decision === "allow"
-          ? await api.approveConsent(consentId)
-          : await api.rejectConsent(consentId);
-      if (
-        decision === "allow" &&
-        (decidedConsent.status !== "granted" || !decidedConsent.expires_at)
-      ) {
-        throw new Error("Consent approval was not confirmed by the backend.");
-      }
-      setConsentDecisions((current) => ({ ...current, [requirement.key]: decision }));
-      toast.success(decision === "allow" ? "Consent recorded." : "Consent denial recorded.");
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unable to save your consent decision.";
-      setSubmissionError(message);
-      toast.error(message);
-    }
+    setConsentDecisions((current) => ({ ...current, [requirement.key]: decision }));
+    setFormValues((current) => ({
+      ...current,
+      [requirement.consentField]: decision === "allow",
+    }));
+    toast.success("Your decision will be recorded with the application submission.");
   };
 
   const submitApplication = async () => {
     if (!citizen || !backendService || !formSchema) {
       toast.error("The service application configuration is incomplete.");
+      return;
+    }
+    const undecidedConsent = activeConsentRequirements.find(
+      (requirement) => !consentDecisions[requirement.key],
+    );
+    if (undecidedConsent) {
+      setSubmissionError("Choose Allow or Deny for every requested data source.");
+      setStepIndex(steps.findIndex((step) => step.id === "consent"));
       return;
     }
     const missingDocument = config.requiredDocuments.find(
@@ -348,7 +346,6 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
     try {
       const submittedData = Object.fromEntries(
         formSchema.fields
-          .filter((field) => !field.id.startsWith("consent_"))
           .filter(
             (field) =>
               !config.requiredInformation.some(
@@ -376,57 +373,75 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
         form_data: submittedData,
         verified_records: selectedRecords,
         consent: consentGranted,
-        remarks: `Submitted through the service-specific GovFlow application wizard. Connected departments: ${config.connectedDepartments.join(", ")}.`,
       });
       applicationCreated = true;
       applicationReference = application.reference_id;
       setCreatedApplication(application);
 
+      const consentIdsForApplication: Record<string, number> = {};
       for (const requirement of activeConsentRequirements) {
-        if (consentDecisions[requirement.key] !== "allow") continue;
-        const consentId = consentIds[requirement.key];
-        if (!consentId) {
-          throw new Error(
-            `The ${requirement.sourceDepartment} consent is missing. External data was not requested.`,
-          );
-        }
-        const result = await api.requestInteroperability({
-          citizen_id: citizen.id,
-          service_id: backendService.id,
-          application_id: application.id,
-          requesting_department: config.department,
-          source_department: requirement.sourceDepartment,
-          data_requested: requirement.dataRequested,
+        const consent = await api.createConsent({
           purpose: consentPurpose(requirement),
-          consent_id: consentId,
+          source_platform_id: requirement.sourcePlatformId,
+          target_platform_id: backendService.platform_id,
+          citizen_id: citizen.id,
+          application_id: application.id,
+          requested_data: requirement.requestedData,
+          requested_fields: [requirement.dataRequested],
         });
-        setExchangeResults((current) => [
-          ...current,
-          {
-            department: requirement.sourceDepartment,
-            status: result.transactionStatus,
-            transactionId: result.transactionId,
-          },
-        ]);
-        if (result.transactionStatus === "FAILED") {
-          throw new Error(
-            result.message || `The ${requirement.sourceDepartment} data request was not completed.`,
-          );
+        consentIdsForApplication[requirement.key] = consent.id;
+        const decision =
+          consentDecisions[requirement.key] === "allow"
+            ? await api.approveConsent(consent.id)
+            : await api.rejectConsent(consent.id);
+        if (
+          consentDecisions[requirement.key] === "allow" &&
+          (decision.status !== "granted" || !decision.expires_at)
+        ) {
+          throw new Error("Consent approval was not confirmed by the backend.");
+        }
+      }
+
+      const allConsentsGranted = activeConsentRequirements.every(
+        (requirement) => consentDecisions[requirement.key] === "allow",
+      );
+      if (allConsentsGranted) {
+        for (const requirement of activeConsentRequirements) {
+          const consentId = consentIdsForApplication[requirement.key];
+          if (!consentId) {
+            throw new Error(
+              `The ${requirement.sourceDepartment} consent is missing. External data was not requested.`,
+            );
+          }
+          const result = await api.requestInteroperability({
+            citizen_id: citizen.id,
+            service_id: backendService.id,
+            application_id: application.id,
+            requesting_department: backendDepartment,
+            source_department: requirement.sourceDepartment,
+            data_requested: requirement.dataRequested,
+            purpose: consentPurpose(requirement),
+            consent_id: consentId,
+          });
+          setExchangeResults((current) => [
+            ...current,
+            {
+              department: requirement.sourceDepartment,
+              status: result.transactionStatus,
+              transactionId: result.transactionId,
+            },
+          ]);
+          if (result.transactionStatus === "FAILED") {
+            throw new Error(
+              result.message ||
+                `The ${requirement.sourceDepartment} data request was not completed.`,
+            );
+          }
         }
       }
 
       for (const [documentName, file] of Object.entries(uploadedFiles)) {
-        const image = await readFileAsBase64(file);
-        await api.verifyDocument({
-          title: documentName,
-          doc_type: documentName,
-          owner_id: citizen.id,
-          application_id: application.id,
-          image_base64: image,
-          citizen_full_name: citizen.full_name,
-          ...(citizen.aadhaar_last4 ? { citizen_aadhaar_last4: citizen.aadhaar_last4 } : {}),
-          applicant_remarks: `Required document for ${service.name}.`,
-        });
+        await api.uploadAndVerifyDocument(file, application.id, documentName);
       }
 
       const updated = await api.getApplication(application.id);
@@ -436,7 +451,11 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
         ...trackedApplication,
         workflow: workflow ?? trackedApplication.workflow ?? [],
       });
-      toast.success(`Application submitted. Reference: ${application.reference_id}`);
+      toast.success(
+        allConsentsGranted
+          ? `Application submitted. Reference: ${application.reference_id}`
+          : `Application submitted. Data verification is waiting for consent. Reference: ${application.reference_id}`,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Application submission failed.";
       setSubmissionError(message);
@@ -760,11 +779,11 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
             <div className="application-consent-list">
               {activeConsentRequirements.map((requirement) => (
                 <article className="application-consent-card" key={requirement.key}>
-                  <h3>Share data with {config.department}</h3>
+                  <h3>Share data with {backendDepartment}</h3>
                   <dl>
                     <div>
                       <dt>Requesting department</dt>
-                      <dd>{config.department}</dd>
+                      <dd>{backendDepartment}</dd>
                     </div>
                     <div>
                       <dt>Source department</dt>
@@ -775,12 +794,12 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
                       <dd>{requirement.dataRequested}</dd>
                     </div>
                     <div>
-                      <dt>Purpose</dt>
-                      <dd>{requirement.purpose}</dd>
+                      <dt>Consent scope</dt>
+                      <dd>{requirement.requestedData}</dd>
                     </div>
                     <div>
-                      <dt>Duration</dt>
-                      <dd>24 hours or until revoked</dd>
+                      <dt>Purpose</dt>
+                      <dd>{requirement.purpose}</dd>
                     </div>
                   </dl>
                   <div className="application-consent-actions">
@@ -798,7 +817,10 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
                       Deny
                     </Button>
                     {consentDecisions[requirement.key] ? (
-                      <strong>Decision saved: {consentDecisions[requirement.key]}</strong>
+                      <strong>
+                        Decision selected: {consentDecisions[requirement.key]}. It will be recorded
+                        when you submit.
+                      </strong>
                     ) : null}
                   </div>
                 </article>
@@ -896,8 +918,8 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
                     {activeConsentRequirements.length
                       ? activeConsentRequirements
                           .map(
-                            (item) =>
-                              `${item.sourceDepartment}: ${consentDecisions[item.key] ?? "not decided"}`,
+                            (requirement) =>
+                              `${requirement.requestedData}: ${consentDecisions[requirement.key] ?? "not decided"}`,
                           )
                           .join(" · ")
                       : "Not required for this service"}

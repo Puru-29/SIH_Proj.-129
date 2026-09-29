@@ -5,7 +5,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
 from connectors.education_connector import EducationConnector
@@ -16,15 +17,18 @@ from connectors.transport_connector import TransportConnector
 from connectors.welfare_connector import WelfareConnector
 from app.models.application import ApplicationStatus, ServiceApplication
 from app.models.application_event import ApplicationEvent
-from app.models.audit import AuditLog
 from app.models.consent import ConsentStatus, DataShareConsent
 from app.models.government_record import GovernmentRecord, GovernmentRecordValue
-from app.models.platform import ConnectedSystem
+from app.models.interoperability_exception import ExceptionStatus
+from app.models.platform import ConnectedSystem, PlatformStatus
 from app.models.service import Service
 from app.models.transaction import InteroperabilityTransaction
 from app.models.transaction_event import TransactionEvent
 from app.models.user import User
-from app.services.interoperability.exception_service import ExceptionService
+from app.services.interoperability.exception_service import (
+    ExceptionService,
+    exception_type,
+)
 from app.services.interoperability.mapping_service import MappingService
 from app.services.interoperability.normalization_service import NormalizationService
 from app.services.interoperability.transaction_service import TransactionService
@@ -33,6 +37,7 @@ from app.services.interoperability.validation_service import (
     ValidationService,
 )
 from app.services.notification_service import notification_service
+from app.services.audit_service import record_audit
 from app.services.workflow_engine import workflow_engine
 
 logger = logging.getLogger(__name__)
@@ -112,22 +117,6 @@ class InteroperabilityEngine:
                 "Service not found.", category="APPLICATION"
             )
         source_system = consent.source_platform
-        consent_status = self.validation.validate_consent(
-            consent,
-            citizen_id=citizen_id,
-            application_id=application_id,
-            service=service,
-            data_requested=data_requested,
-            purpose=purpose,
-            source_department=source_department,
-            requesting_department=requesting_department,
-            source_system=source_system,
-        )
-        if source_system is None:
-            raise InteroperabilityValidationError(
-                "The consent source system is not registered.", category="CONSENT"
-            )
-
         transaction = self.transactions.create(
             db,
             application_id=application_id,
@@ -141,6 +130,38 @@ class InteroperabilityEngine:
             purpose=purpose,
         )
         transaction_id = transaction.transaction_id
+        try:
+            consent_status = self.validation.validate_consent(
+                consent,
+                citizen_id=citizen_id,
+                application_id=application_id,
+                service=service,
+                data_requested=data_requested,
+                purpose=purpose,
+                source_department=source_department,
+                requesting_department=requesting_department,
+                source_system=source_system,
+            )
+        except InteroperabilityValidationError as exc:
+            self._fail(
+                db,
+                transaction,
+                citizen_id=citizen_id,
+                message=str(exc),
+                category=exc.category,
+            )
+            return self._result(transaction, message=str(exc))
+        if source_system is None:
+            self._fail(
+                db,
+                transaction,
+                citizen_id=citizen_id,
+                message="The consent source system is not registered.",
+                category="SOURCE_SYSTEM_UNAVAILABLE",
+            )
+            return self._result(
+                transaction, message="The consent source system is not registered."
+            )
 
         if consent_status == ConsentStatus.PENDING:
             transaction.consent_status = "PENDING"
@@ -219,12 +240,19 @@ class InteroperabilityEngine:
             logger.exception(
                 "Source connector failed for interoperability transaction %s", transaction_id
             )
+            category = (
+                "TIMEOUT"
+                if isinstance(exc, TimeoutError)
+                else "SOURCE_SYSTEM_UNAVAILABLE"
+                if isinstance(exc, ConnectionError)
+                else getattr(exc, "category", "CONNECTOR_FAILURE")
+            )
             self._fail(
                 db,
                 transaction,
                 citizen_id=citizen_id,
                 message=f"Source system request failed: {exc}",
-                category="SOURCE_CONNECTOR",
+                category=category,
             )
             return self._result(transaction, message="Source system request failed.")
 
@@ -239,8 +267,8 @@ class InteroperabilityEngine:
             raw = self.validation.validate_source_response(raw)
             if not connector.verify_record(citizen_id, raw):
                 raise InteroperabilityValidationError(
-                    "The source system could not verify the returned record.",
-                    category="SOURCE_VERIFICATION",
+                    "Citizen was not found or verified by the source system.",
+                    category="CITIZEN_NOT_FOUND",
                 )
         except (InteroperabilityValidationError, ValueError, TypeError) as exc:
             self._fail(
@@ -266,6 +294,13 @@ class InteroperabilityEngine:
                 requested_type=data_requested,
                 connector_key=connector.mapping_key,
             )
+            mapping_missing = common_record.get("missing_required_fields", [])
+            if mapping_missing:
+                raise InteroperabilityValidationError(
+                    "Source response is missing required fields: "
+                    + ", ".join(mapping_missing),
+                    category="MISSING_REQUIRED_FIELD",
+                )
             common_record["verification_status"] = "VERIFIED"
             normalized = self.normalization.normalize(common_record)
             missing = self._missing_common_fields(normalized)
@@ -341,6 +376,32 @@ class InteroperabilityEngine:
                 },
                 severity="high",
             )
+            notification_service.create_event(
+                db,
+                event_type="DATA_CONFLICT",
+                citizen_id=citizen_id,
+                department_id=application.department_id,
+                application_id=application.id,
+                transaction_id=transaction.id,
+                title=f"{data_requested} needs review",
+                message=(
+                    f"Conflicting {data_requested} data was received from "
+                    f"{source_department} and flagged for review."
+                ),
+            )
+            notification_service.create_event(
+                db,
+                event_type="APPLICATION_UPDATED",
+                citizen_id=citizen_id,
+                department_id=application.department_id,
+                application_id=application.id,
+                transaction_id=transaction.id,
+                title="Application requires review",
+                message=(
+                    f"Application {application.reference_id} was updated to "
+                    "require review of conflicting source data."
+                ),
+            )
             self._update_application(
                 db,
                 application,
@@ -356,7 +417,6 @@ class InteroperabilityEngine:
                 db,
                 transaction,
                 citizen_id=citizen_id,
-                title=f"{data_requested} needs review",
                 message=f"Conflicting {data_requested} data was received from {source_department} and flagged for review.",
             )
             return self._result(
@@ -397,12 +457,26 @@ class InteroperabilityEngine:
             actor_id=citizen_id,
             details=f"{data_requested} was retrieved, validated, normalized, and stored.",
         )
+        notification_service.create_event(
+            db,
+            event_type="APPLICATION_UPDATED",
+            citizen_id=citizen_id,
+            department_id=application.department_id,
+            application_id=application.id,
+            transaction_id=transaction.id,
+            title="Application updated",
+            message=(
+                f"Application {application.reference_id} was updated with "
+                f"verified {data_requested} data."
+            ),
+        )
         notification = self._notify(
             db,
             transaction,
             citizen_id=citizen_id,
             title=f"{data_requested} retrieved",
             message=f"Your {data_requested} was securely retrieved from {source_department} with your permission.",
+            event_type="DATA_VERIFIED",
         )
         db.commit()
         result = self._result(
@@ -414,30 +488,564 @@ class InteroperabilityEngine:
         result["notification"] = notification
         return result
 
+    @staticmethod
+    def match_document_record(
+        db: Session,
+        *,
+        citizen_id: int,
+        certificate_number: str,
+        extracted_fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Compare extracted certificate fields with a persisted verified source record."""
+        records = (
+            db.query(GovernmentRecord)
+            .join(GovernmentRecordValue)
+            .filter(
+                GovernmentRecord.citizen_id == citizen_id,
+                func.lower(GovernmentRecord.source_record_id)
+                == certificate_number.strip().lower(),
+                GovernmentRecord.status == "VERIFIED",
+                GovernmentRecordValue.field_key.in_(
+                    ("income_certificate_no", "certificate_no", "certificate_number")
+                ),
+                func.lower(GovernmentRecordValue.field_value)
+                == certificate_number.strip().lower(),
+            )
+            .options(
+                joinedload(GovernmentRecord.values),
+                joinedload(GovernmentRecord.connected_system),
+            )
+            .distinct()
+            .all()
+        )
+        if not records:
+            return {
+                "status": "NOT_FOUND",
+                "record_id": None,
+                "source_system": None,
+                "matched_fields": [],
+                "mismatched_fields": [],
+                "source_fields": {},
+            }
+
+        record = records[0]
+        source_fields = {
+            item.field_key: item.field_value for item in record.values
+        }
+        aliases = {
+            "name": ("name", "full_name"),
+            "income": ("income", "annual_income"),
+            "issue_date": ("issue_date", "issued_at"),
+        }
+        matched_fields = ["certificate_number"]
+        mismatched_fields = []
+        for extracted_key, source_keys in aliases.items():
+            extracted_value = extracted_fields.get(extracted_key)
+            source_value = next(
+                (source_fields[key] for key in source_keys if key in source_fields),
+                None,
+            )
+            if extracted_value is None or source_value is None:
+                continue
+            if extracted_key == "income":
+                try:
+                    matches = float(extracted_value) == float(source_value)
+                except (TypeError, ValueError):
+                    matches = False
+            else:
+                matches = " ".join(str(extracted_value).casefold().split()) == (
+                    " ".join(str(source_value).casefold().split())
+                )
+            (matched_fields if matches else mismatched_fields).append(extracted_key)
+
+        return {
+            "status": "MISMATCHED" if mismatched_fields else "MATCHED",
+            "record_id": str(record.id),
+            "source_record_id": record.source_record_id,
+            "source_system": (
+                record.connected_system.name if record.connected_system else None
+            ),
+            "matched_fields": matched_fields,
+            "mismatched_fields": mismatched_fields,
+            "source_fields": source_fields,
+        }
+
+    def retry_exception(
+        self,
+        db: Session,
+        exception: Any,
+        *,
+        actor: User,
+    ) -> dict[str, Any]:
+        transaction = db.get(InteroperabilityTransaction, exception.transaction_id)
+        if transaction is None:
+            raise ValueError("The exception has no linked interoperability transaction.")
+        transaction_id = transaction.id
+        exception_model = type(exception)
+        exception_id = exception.id
+
+        application = db.get(ServiceApplication, transaction.application_id)
+        consent = db.get(DataShareConsent, transaction.consent_id)
+        service = db.get(Service, application.service_id) if application else None
+        source_system = db.get(ConnectedSystem, transaction.source_system_id)
+        citizen = db.get(User, transaction.citizen_id)
+        claimed = (
+            db.query(exception_model)
+            .filter(
+                exception_model.id == exception_id,
+                exception_model.status.in_(
+                    [ExceptionStatus.OPEN, ExceptionStatus.ESCALATED]
+                ),
+            )
+            .update(
+                {
+                    exception_model.status: ExceptionStatus.RETRYING,
+                    exception_model.retry_count: exception_model.retry_count + 1,
+                    exception_model.resolved_at: None,
+                },
+                synchronize_session=False,
+            )
+        )
+        if claimed != 1:
+            db.rollback()
+            raise ValueError("Only open or escalated exceptions can be retried.")
+        db.refresh(exception)
+        db.flush()
+        self.transactions.transition(
+            db,
+            transaction,
+            "RETRYING",
+            f"Officer {actor.id} started retry {exception.retry_count}.",
+            event_data={"attempt": exception.retry_count, "exceptionId": exception.id},
+        )
+
+        try:
+            if settings.data_mode != "demo":
+                raise InteroperabilityValidationError(
+                    "No production government connector is configured.",
+                    category="CONNECTOR_FAILURE",
+                )
+            if application is None or citizen is None or service is None:
+                raise InteroperabilityValidationError(
+                    "The application, citizen, or service for this request no longer exists.",
+                    category="CITIZEN_NOT_FOUND"
+                    if citizen is None
+                    else "VALIDATION_FAILURE",
+                )
+            if consent is None or source_system is None:
+                raise InteroperabilityValidationError(
+                    "The consent or source system for this request no longer exists.",
+                    category="CONSENT_EXPIRED"
+                    if consent is None
+                    else "SOURCE_SYSTEM_UNAVAILABLE",
+                )
+            consent_status = self.validation.validate_consent(
+                consent,
+                citizen_id=transaction.citizen_id,
+                application_id=transaction.application_id,
+                service=service,
+                data_requested=transaction.data_requested,
+                purpose=transaction.purpose,
+                source_department=transaction.source_department,
+                requesting_department=transaction.requesting_department,
+                source_system=source_system,
+            )
+            if consent_status != ConsentStatus.GRANTED:
+                raise InteroperabilityValidationError(
+                    "Active granted consent is required before retrying the source request.",
+                    category="CONSENT_EXPIRED",
+                )
+            connector = self._select_connector(
+                source_system, transaction.source_department
+            )
+            transaction.request_status = "IN_PROGRESS"
+            transaction.response_status = "PENDING"
+            transaction.validation_status = "PENDING"
+            transaction.mapping_status = "PENDING"
+            self.transactions.transition(
+                db,
+                transaction,
+                "DATA_REQUESTED",
+                f"Retry requested {transaction.data_requested} from {source_system.name}.",
+                event_data={"attempt": exception.retry_count},
+            )
+            raw = self._request_source_data(
+                db,
+                connector,
+                source_system,
+                transaction.citizen_id,
+                transaction.data_requested,
+                transaction.purpose,
+                transaction,
+            )
+            raw = self.validation.validate_source_response(raw)
+            self.transactions.transition(
+                db,
+                transaction,
+                "DATA_RECEIVED",
+                f"Source system {source_system.name} returned a retry response.",
+                event_data={"attempt": exception.retry_count},
+            )
+            if not connector.verify_record(transaction.citizen_id, raw):
+                raise InteroperabilityValidationError(
+                    "The source system could not verify the returned citizen record.",
+                    category="CITIZEN_NOT_FOUND",
+                )
+            transaction.request_status = "SUCCESS"
+            transaction.validation_status = "PASSED"
+            self.transactions.transition(
+                db,
+                transaction,
+                "DATA_VALIDATED",
+                "Retried source response passed validation.",
+                event_data={"attempt": exception.retry_count},
+            )
+            common_record = self.mapping.map_to_common_model(
+                db,
+                raw=raw,
+                citizen_id=transaction.citizen_id,
+                source_system=source_system,
+                target_system_id=transaction.destination_system_id,
+                requested_type=transaction.data_requested,
+                connector_key=connector.mapping_key,
+            )
+            mapping_missing = common_record.get("missing_required_fields", [])
+            if mapping_missing:
+                raise InteroperabilityValidationError(
+                    "Source response is missing required fields: "
+                    + ", ".join(mapping_missing),
+                    category="MISSING_REQUIRED_FIELD",
+                )
+            common_record["verification_status"] = "VERIFIED"
+            normalized = self.normalization.normalize(common_record)
+            missing = self._missing_common_fields(normalized)
+            if missing:
+                raise InteroperabilityValidationError(
+                    f"Source response is missing required fields: {', '.join(missing)}",
+                    category="MISSING_REQUIRED_FIELD",
+                )
+            transaction.mapping_status = "PASSED"
+            transaction.response_status = "RECEIVED"
+            self.transactions.transition(
+                db,
+                transaction,
+                "DATA_NORMALIZED",
+                "Retried source fields were mapped and normalized.",
+                event_data={"attempt": exception.retry_count},
+            )
+            conflict_values = self._detect_conflicts(
+                db,
+                citizen_id=transaction.citizen_id,
+                normalized=normalized,
+            )
+            conflicts = sorted(conflict_values)
+            record = self._store_record(
+                db,
+                application=application,
+                source_system=source_system,
+                citizen_id=transaction.citizen_id,
+                normalized=normalized,
+                conflicts=conflicts,
+            )
+            if conflicts:
+                transaction.response_status = "CONFLICT"
+                self.transactions.transition(
+                    db,
+                    transaction,
+                    "CONFLICT",
+                    "Retried source data still conflicts with an existing government record.",
+                    event_data={"conflictingValues": conflict_values},
+                )
+                self._update_application(
+                    db,
+                    application,
+                    citizen_id=transaction.citizen_id,
+                    data_requested=transaction.data_requested,
+                    source_department=transaction.source_department,
+                    outcome="conflict",
+                )
+                exception.category = "DATA_CONFLICT"
+                exception.message = (
+                    "Retried source data still conflicts with an existing government record."
+                )
+                exception.status = ExceptionStatus.OPEN
+                notification_service.create_event(
+                    db,
+                    event_type="DATA_CONFLICT",
+                    citizen_id=transaction.citizen_id,
+                    department_id=application.department_id,
+                    application_id=application.id,
+                    transaction_id=transaction.id,
+                    title=f"{transaction.data_requested} needs review",
+                    message=exception.message,
+                )
+                notification_service.create_event(
+                    db,
+                    event_type="APPLICATION_UPDATED",
+                    citizen_id=transaction.citizen_id,
+                    department_id=application.department_id,
+                    application_id=application.id,
+                    transaction_id=transaction.id,
+                    title="Application requires review",
+                    message=(
+                        f"Application {application.reference_id} was updated to "
+                        "require review of conflicting source data."
+                    ),
+                )
+                self._audit_retry(
+                    db, exception, transaction, actor, result="failure"
+                )
+                db.commit()
+                return {
+                    **self._result(
+                        transaction,
+                        message=exception.message,
+                        normalized=normalized,
+                        record=record,
+                    ),
+                    "exception": self._exception_result(exception, transaction),
+                }
+
+            self._update_application(
+                db,
+                application,
+                citizen_id=transaction.citizen_id,
+                data_requested=transaction.data_requested,
+                source_department=transaction.source_department,
+                outcome="completed",
+            )
+            transaction.response_status = "SUCCESS"
+            self.transactions.transition(
+                db,
+                transaction,
+                "APPLICATION_UPDATED",
+                "Application updated with verified data from the retried request.",
+                event_data={"attempt": exception.retry_count},
+            )
+            self.transactions.transition(
+                db,
+                transaction,
+                "COMPLETED",
+                "Interoperability retry completed successfully.",
+                event_data={"attempt": exception.retry_count},
+            )
+            workflow_engine.sync_completed_data_request(
+                db,
+                application,
+                source_department=transaction.source_department,
+                actor_id=actor.id,
+            )
+            exception.status = ExceptionStatus.RESOLVED
+            exception.resolved_at = datetime.now(timezone.utc)
+            exception.message = "Connector retry succeeded."
+            notification_service.create_event(
+                db,
+                event_type="DATA_VERIFIED",
+                citizen_id=transaction.citizen_id,
+                department_id=application.department_id,
+                application_id=application.id,
+                transaction_id=transaction.id,
+                title=f"{transaction.data_requested} verified",
+                message=(
+                    f"Retried data from {transaction.source_department} was "
+                    f"verified for application {application.reference_id}."
+                ),
+            )
+            notification_service.create_event(
+                db,
+                event_type="APPLICATION_UPDATED",
+                citizen_id=transaction.citizen_id,
+                department_id=application.department_id,
+                application_id=application.id,
+                transaction_id=transaction.id,
+                title="Application updated",
+                message=(
+                    f"Application {application.reference_id} was updated with "
+                    f"verified {transaction.data_requested} data."
+                ),
+            )
+            self._audit_retry(db, exception, transaction, actor, result="success")
+            db.commit()
+            return {
+                **self._result(
+                    transaction,
+                    message="Connector retry completed successfully.",
+                    normalized=normalized,
+                    record=record,
+                ),
+                "exception": self._exception_result(exception, transaction),
+            }
+        except Exception as exc:
+            db.rollback()
+            exception = db.get(exception_model, exception_id)
+            transaction = db.get(InteroperabilityTransaction, transaction_id)
+            if exception is None or transaction is None:
+                raise
+            category = getattr(exc, "category", None)
+            if category is None:
+                category = (
+                    "MALFORMED_DATA"
+                    if isinstance(exc, (TypeError, ValueError, KeyError))
+                    else "TIMEOUT"
+                    if isinstance(exc, TimeoutError)
+                    else "CONNECTOR_FAILURE"
+                )
+            mapped_type = exception_type(category, str(exc))
+            exception.category = mapped_type
+            exception.message = str(exc) or mapped_type
+            exception.status = ExceptionStatus.OPEN
+            exception.resolved_at = None
+            transaction.request_status = "FAILED"
+            transaction.response_status = "FAILED"
+            transaction.validation_status = (
+                "FAILED"
+                if mapped_type
+                in {"INVALID_RESPONSE", "MALFORMED_DATA", "MISSING_REQUIRED_FIELD", "VALIDATION_FAILURE"}
+                else transaction.validation_status
+            )
+            self.transactions.transition(
+                db,
+                transaction,
+                "FAILED",
+                exception.message,
+                error_code=mapped_type,
+                error_message=exception.message,
+                event_data={"attempt": exception.retry_count},
+            )
+            self._audit_retry(db, exception, transaction, actor, result="failure")
+            notification_service.create_event(
+                db,
+                event_type="EXCEPTION_OCCURRED",
+                citizen_id=transaction.citizen_id,
+                department_id=transaction.application.department_id
+                if transaction.application
+                else actor.department_id,
+                application_id=transaction.application_id,
+                transaction_id=transaction.id,
+                title="Government data request still needs attention",
+                message=exception.message,
+            )
+            db.commit()
+            return {
+                "status": "failure",
+                "transactionStatus": transaction.status,
+                "message": exception.message,
+                "transactionId": transaction.transaction_id,
+                "exception": self._exception_result(exception, transaction),
+            }
+
+    @staticmethod
+    def _audit_retry(
+        db: Session,
+        exception: Any,
+        transaction: InteroperabilityTransaction,
+        actor: User,
+        *,
+        result: str,
+    ) -> None:
+        record_audit(
+            db,
+            action="EXCEPTION_RETRIED",
+            resource_type="interoperability_exception",
+            resource_id=exception.id,
+            actor_id=actor.id,
+            role_id=actor.role_id,
+            department_id=(
+                transaction.application.department_id
+                if transaction.application
+                else actor.department_id
+            ),
+            transaction=transaction,
+            result=result,
+            metadata={
+                "retry_count": exception.retry_count,
+                "exception_type": exception.category,
+                "transaction_status": transaction.status,
+            },
+            details=exception.message,
+        )
+
+    @staticmethod
+    def _exception_result(
+        exception: Any, transaction: InteroperabilityTransaction
+    ) -> dict[str, Any]:
+        return {
+            "id": exception.id,
+            "exceptionId": exception.id,
+            "transactionId": transaction.transaction_id,
+            "applicationId": exception.application_id,
+            "sourceSystem": exception.system,
+            "system": exception.system,
+            "type": exception.category,
+            "category": exception.category,
+            "message": exception.message,
+            "severity": exception.severity,
+            "status": exception.status.value
+            if isinstance(exception.status, ExceptionStatus)
+            else str(exception.status).upper(),
+            "retryCount": exception.retry_count,
+            "details": exception.details,
+            "createdAt": exception.created_at.isoformat()
+            if exception.created_at
+            else None,
+            "updatedAt": exception.updated_at.isoformat()
+            if exception.updated_at
+            else None,
+            "resolvedAt": exception.resolved_at.isoformat()
+            if exception.resolved_at
+            else None,
+        }
+
     def _select_connector(self, source_system: ConnectedSystem, source_department: str) -> Any:
+        stored_status = (
+            source_system.status.value
+            if isinstance(source_system.status, PlatformStatus)
+            else str(source_system.status)
+        )
+        if not source_system.is_active or stored_status.lower() == PlatformStatus.OFFLINE.value:
+            raise InteroperabilityValidationError(
+                f"Source system {source_system.name} is unavailable.",
+                category="CONNECTOR_UNAVAILABLE",
+            )
+        provider = self.connector_for_system(source_system, source_department)
+        if provider is not None:
+            connector_health = provider.health_check()
+            if connector_health.get("status") != "healthy":
+                raise InteroperabilityValidationError(
+                    f"Source connector is unhealthy: {provider.system_name}.",
+                    category="CONNECTOR_UNAVAILABLE",
+                )
+            return provider
+        raise InteroperabilityValidationError(
+            f"No source connector is configured for {source_department}.",
+            category="CONNECTOR_NOT_FOUND",
+        )
+
+    def connector_for_system(
+        self,
+        source_system: ConnectedSystem,
+        source_department: str | None = None,
+    ) -> Any | None:
         keys = {
-            self._compact(source_department),
+            self._compact(source_department or ""),
             self._compact(source_system.name),
             self._compact(source_system.slug),
-            self._compact(source_system.department.name if source_system.department else ""),
+            self._compact(
+                source_system.department.name if source_system.department else ""
+            ),
         }
         for provider in self.connectors:
             provider_keys = {
                 self._compact(provider.department),
                 self._compact(provider.system_name),
             }
-            if any(key and (key in provider_key or provider_key in key) for key in keys for provider_key in provider_keys):
-                connector_health = provider.health_check()
-                if connector_health.get("status") != "healthy":
-                    raise InteroperabilityValidationError(
-                        f"Source connector is unhealthy: {provider.system_name}.",
-                        category="CONNECTOR_UNAVAILABLE",
-                    )
+            if any(
+                key and (key in provider_key or provider_key in key)
+                for key in keys
+                for provider_key in provider_keys
+            ):
                 return provider
-        raise InteroperabilityValidationError(
-            f"No source connector is configured for {source_department}.",
-            category="CONNECTOR_NOT_FOUND",
-        )
+        return None
 
     def _request_source_data(
         self,
@@ -598,7 +1206,6 @@ class InteroperabilityEngine:
                 note=application.remarks,
             )
         )
-        db.commit()
 
     def _fail(
         self,
@@ -611,6 +1218,22 @@ class InteroperabilityEngine:
     ) -> None:
         transaction.request_status = "FAILED"
         transaction.response_status = "FAILED"
+        if category == "CONSENT":
+            transaction.consent_status = "FAILED"
+        elif category in {
+            "SOURCE_RESPONSE",
+            "INVALID_RESPONSE",
+            "CITIZEN_NOT_FOUND",
+            "VALIDATION",
+        }:
+            transaction.validation_status = "FAILED"
+        elif category in {
+            "MISSING_REQUIRED_FIELD",
+            "MALFORMED_DATA",
+            "NORMALIZATION",
+            "MISSING_FIELDS",
+        }:
+            transaction.mapping_status = "FAILED"
         self.exceptions.create(
             db,
             application_id=transaction.application_id,
@@ -636,12 +1259,17 @@ class InteroperabilityEngine:
             actor_id=citizen_id,
             details=message,
         )
-        self._notify(
+        notification_service.create_event(
             db,
-            transaction,
+            event_type="EXCEPTION_OCCURRED",
             citizen_id=citizen_id,
+            department_id=transaction.application.department_id
+            if transaction.application
+            else None,
+            application_id=transaction.application_id,
+            transaction_id=transaction.id,
             title="Government data request failed",
-            message=f"Your request for {transaction.data_requested} could not be completed.",
+            message=message,
         )
         db.commit()
 
@@ -651,7 +1279,6 @@ class InteroperabilityEngine:
         transaction: InteroperabilityTransaction,
         *,
         citizen_id: int,
-        title: str,
         message: str,
     ) -> None:
         self._audit(
@@ -660,13 +1287,6 @@ class InteroperabilityEngine:
             action="INTEROPERABILITY_TRANSACTION_CONFLICT",
             actor_id=citizen_id,
             details=message,
-        )
-        self._notify(
-            db,
-            transaction,
-            citizen_id=citizen_id,
-            title=title,
-            message=message,
         )
         db.commit()
 
@@ -678,6 +1298,7 @@ class InteroperabilityEngine:
         citizen_id: int,
         title: str,
         message: str,
+        event_type: str = "DATA_VERIFIED",
     ) -> Any:
         notification = notification_service.create_notification(
             db=db,
@@ -687,21 +1308,7 @@ class InteroperabilityEngine:
             title=title,
             message=message,
             kind="Application",
-        )
-        notification_id = (
-            notification.get("id", "unknown")
-            if isinstance(notification, dict)
-            else notification.id
-        )
-        db.add(
-            AuditLog(
-                action="NOTIFICATION_SENT",
-                entity_type="notification",
-                entity_id=str(notification_id),
-                details="Citizen notification created after interoperability processing.",
-                actor_id=citizen_id,
-                transaction_id=transaction.public_id,
-            )
+            event_type=event_type,
         )
         return notification
 
@@ -716,15 +1323,24 @@ class InteroperabilityEngine:
         entity_id: str | None = None,
         entity_type: str = "interoperability_transaction",
     ) -> None:
-        db.add(
-            AuditLog(
-                action=action,
-                entity_type=entity_type,
-                entity_id=entity_id or (transaction.transaction_id if transaction else ""),
-                details=details,
-                actor_id=actor_id,
-                transaction_id=transaction.public_id if transaction else None,
-            )
+        record_audit(
+            db,
+            action=action,
+            resource_type=entity_type,
+            resource_id=entity_id
+            or (transaction.transaction_id if transaction else ""),
+            actor_id=actor_id,
+            department_id=transaction.application.department_id
+            if transaction and transaction.application
+            else None,
+            transaction=transaction,
+            result="failure"
+            if action.endswith("_FAILED")
+            else "conflict"
+            if action.endswith("_CONFLICT")
+            else "success",
+            metadata={"detail": details},
+            details=details,
         )
 
     @staticmethod

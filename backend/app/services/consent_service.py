@@ -4,10 +4,12 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models.audit import AuditLog
 from app.models.consent import ConsentDataItem, ConsentStatus, DataShareConsent
 from app.models.platform import DigitalPlatform
 from app.services.notification_service import notification_service
+from app.services.audit_service import record_audit
+from app.models.application import ServiceApplication
+from app.services.workflow_engine import workflow_engine
 
 
 class ConsentService:
@@ -59,21 +61,25 @@ class ConsentService:
             )
             for field in unique_fields
         )
-        db.add(
-            AuditLog(
-                action="CONSENT_REQUESTED",
-                entity_type="data_share_consent",
-                entity_id=str(consent.id),
-                details=(
-                    f"{target_platform.department.name} requested {requested_data} "
-                    f"from {source_platform.department.name} for {purpose}."
-                ),
-                actor_id=citizen_id,
-            )
+        record_audit(
+            db,
+            action="CONSENT_REQUESTED",
+            resource_type="data_share_consent",
+            resource_id=consent.id,
+            actor_id=citizen_id,
+            actor_role="citizen",
+            department_id=getattr(consent, "requesting_department_id", None),
+            metadata={
+                "application_id": application_id,
+                "source_department_id": source_platform.department_id,
+                "requesting_department_id": target_platform.department_id,
+            },
         )
-        notification_service.create_notification(
-            db=db,
+        notification_service.create_event(
+            db,
+            event_type="CONSENT_REQUIRED",
             citizen_id=citizen_id,
+            department_id=target_platform.department_id,
             application_id=application_id,
             title="Data-sharing consent requested",
             message=(
@@ -81,7 +87,6 @@ class ConsentService:
                 f"from {source_platform.department.name} for {purpose}. "
                 "Review and approve or reject this request."
             ),
-            kind="Consent",
         )
         db.commit()
         db.refresh(consent)
@@ -99,10 +104,51 @@ class ConsentService:
         self._audit(
             db,
             consent,
-            action="CONSENT_APPROVED",
+            action="CONSENT_GRANTED",
             details="Citizen approved this data-sharing request.",
             actor_id=citizen_id,
         )
+        notification_service.create_event(
+            db,
+            event_type="CONSENT_GRANTED",
+            citizen_id=citizen_id,
+            department_id=consent.requesting_department_id,
+            application_id=consent.application_id,
+            title="Data-sharing consent granted",
+            message=(
+                f"Your consent to share {consent.requested_data} for "
+                f"{consent.purpose} is now active."
+            ),
+        )
+        db.flush()
+        if consent.application_id is not None:
+            application = (
+                db.query(ServiceApplication)
+                .filter(ServiceApplication.id == consent.application_id)
+                .first()
+            )
+            if application is not None and application.workflow_run is not None:
+                consent_step = next(
+                    (
+                        step
+                        for step in application.workflow_run.steps
+                        if step.step_type == "CONSENT"
+                        and step.status == "in_progress"
+                    ),
+                    None,
+                )
+                requirements = application.workflow_run.required_consents or []
+                if consent_step is not None and workflow_engine._consent_requirements_met(
+                    db, citizen_id, requirements
+                ):
+                    workflow_engine.transition_step(
+                        db,
+                        application,
+                        consent_step.step_key,
+                        next_status="completed",
+                        actor_id=citizen_id,
+                        detail="All required consent requests were approved by the citizen.",
+                    )
         db.commit()
         db.refresh(consent)
         return consent
@@ -170,14 +216,16 @@ class ConsentService:
         details: str,
         actor_id: int,
     ) -> None:
-        db.add(
-            AuditLog(
-                action=action,
-                entity_type="data_share_consent",
-                entity_id=str(consent.id),
-                details=details,
-                actor_id=actor_id,
-            )
+        record_audit(
+            db,
+            action=action,
+            resource_type="data_share_consent",
+            resource_id=consent.id,
+            actor_id=actor_id,
+            actor_role="citizen",
+            department_id=getattr(consent, "requesting_department_id", None),
+            metadata={"consent_status": consent.status.value},
+            details=details,
         )
 
     @staticmethod

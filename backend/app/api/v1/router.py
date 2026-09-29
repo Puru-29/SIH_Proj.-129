@@ -1,8 +1,4 @@
-from typing import Annotated
-
-from fastapi import APIRouter, Depends
-from app.api.deps import require_role
-from app.models.user import User
+from fastapi import APIRouter
 from app.api.v1.auth import router as auth_router
 from app.api.v1.departments import router as departments_router
 from app.api.v1.platforms import router as platforms_router
@@ -15,6 +11,8 @@ from app.api.v1.documents import router as documents_router
 from app.api.v1.ml import router as ml_router
 from app.api.v1.interoperability import router as interoperability_router
 from app.api.v1.workflows import router as workflows_router
+from app.api.v1.notifications import router as notifications_router
+from app.api.v1.system import router as system_router
 
 api_v1_router = APIRouter()
 api_v1_router.include_router(auth_router)
@@ -29,15 +27,8 @@ api_v1_router.include_router(documents_router)
 api_v1_router.include_router(ml_router)
 api_v1_router.include_router(interoperability_router)
 api_v1_router.include_router(workflows_router)
-
-
-@api_v1_router.get("/system/health", tags=["System"])
-def get_system_health(
-    _admin: Annotated[
-        User, Depends(require_role("interoperability_admin", "system_admin"))
-    ],
-):
-    return {"status": "ok", "app": "SIH26129 Inter-Governmental Mesh API"}
+api_v1_router.include_router(notifications_router)
+api_v1_router.include_router(system_router)
 
 
 @api_v1_router.get("/info", tags=["System"])

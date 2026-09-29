@@ -94,7 +94,9 @@ def create_workflow(
     ],
 ):
     try:
-        workflow = workflow_engine.create_definition(db, payload)
+        workflow = workflow_engine.create_definition(
+            db, payload, actor_id=_admin.id
+        )
     except WorkflowEngineError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return serialize_workflow(workflow)
@@ -122,7 +124,9 @@ def revise_workflow(
             detail="A workflow revision must keep the same service_id.",
         )
     try:
-        workflow = workflow_engine.create_definition(db, payload)
+        workflow = workflow_engine.create_definition(
+            db, payload, actor_id=_admin.id, audit_action="WORKFLOW_REVISED"
+        )
     except WorkflowEngineError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return serialize_workflow(workflow)

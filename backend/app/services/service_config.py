@@ -380,7 +380,7 @@ def _field(field_id: str) -> dict[str, Any]:
     value["id"] = field_id
     if field_id.startswith("consent_"):
         label, help_text = CONSENT_FIELDS.get(field_id, ("Allow verification for this service", "This permission is used only to process this application."))
-        value = {"id": field_id, "type": "checkbox", "label": label, "help_text": help_text, "required": True}
+        value = {"id": field_id, "type": "checkbox", "label": label, "help_text": help_text, "required": False}
     return value
 
 

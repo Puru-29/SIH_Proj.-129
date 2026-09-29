@@ -5,6 +5,7 @@ from typing import Any
 
 from app.config import settings
 from app.database import SessionLocal
+from sqlalchemy.orm import Session
 from app.providers.demo.education_provider import EducationDemoProvider
 from app.providers.demo.municipal_provider import MunicipalDemoProvider
 from app.providers.demo.revenue_provider import RevenueDemoProvider
@@ -161,11 +162,13 @@ class InteroperabilityService:
         data_requested: str,
         purpose: str,
         authenticated_user: User | None = None,
+        db: Session | None = None,
     ) -> dict[str, Any]:
-        db = SessionLocal()
+        owns_session = db is None
+        session = db or SessionLocal()
         try:
             return self.engine.process(
-                db,
+                session,
                 citizen_id=int(citizen_id),
                 service_id=service_id,
                 application_id=application_id,
@@ -177,7 +180,8 @@ class InteroperabilityService:
                 authenticated_user=authenticated_user,
             )
         finally:
-            db.close()
+            if owns_session:
+                session.close()
 
     @staticmethod
     def _compact(value: str) -> str:

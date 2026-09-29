@@ -4,12 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.api.deps import require_role
+from app.api.deps import get_user_role_key, require_role
 from app.models.service import Service
 from app.models.user import User
 from app.schemas.service import ServiceCreate, ServiceRead
 from app.services.service_config import SERVICE_NAMES, get_service_config
 from app.services.workflow_engine import workflow_engine
+from app.services.audit_service import record_audit
 
 router = APIRouter(prefix="/services", tags=["Government Services"])
 
@@ -77,6 +78,18 @@ def create_service(
         platform_id=payload.platform_id,
     )
     db.add(svc)
+    db.flush()
+    record_audit(
+        db,
+        action="SERVICE_CREATED",
+        resource_type="service",
+        resource_id=svc.id,
+        actor_id=_admin.id,
+        actor_role=get_user_role_key(_admin),
+        role_id=_admin.role_id,
+        department_id=svc.department_id,
+        metadata={"code": svc.code, "platform_id": svc.platform_id},
+    )
     db.commit()
     db.refresh(svc)
     return svc

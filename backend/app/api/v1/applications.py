@@ -29,6 +29,8 @@ from app.models.user import User
 from app.models.workflow import Workflow
 from app.schemas.application import ApplicationCreate, ApplicationUpdate, WorkflowStageUpdate
 from app.services.service_config import validate_form_data
+from app.services.audit_service import record_audit
+from app.services.notification_service import notification_service
 from app.services.workflow_engine import WorkflowEngineError, workflow_engine
 
 router = APIRouter(prefix="/applications", tags=["Service Applications"])
@@ -336,14 +338,16 @@ def assign_application_to_me(
                 note=f"Assigned to {current_user.full_name}.",
             )
         )
-        db.add(
-            AuditLog(
-                action="APPLICATION_ASSIGNED",
-                entity_type="service_application",
-                entity_id=str(app.id),
-                details=f"Application assigned to {current_user.full_name}.",
-                actor_id=current_user.id,
-            )
+        record_audit(
+            db,
+            action="APPLICATION_ASSIGNED",
+            resource_type="service_application",
+            resource_id=app.id,
+            actor_id=current_user.id,
+            actor_role=get_user_role_key(current_user),
+            role_id=current_user.role_id,
+            department_id=app.department_id,
+            metadata={"assigned_officer_id": current_user.id},
         )
         db.commit()
         db.refresh(app)
@@ -573,14 +577,33 @@ def get_application_workspace(
         "exceptions": [
             {
                 "id": exception.id,
+                "exception_id": exception.id,
                 "system": exception.system,
+                "source_system": exception.system,
                 "category": exception.category,
+                "type": exception.category,
                 "message": exception.message,
                 "severity": exception.severity,
-                "status": exception.status.value,
+                "status": (
+                    exception.status.value
+                    if hasattr(exception.status, "value")
+                    else str(exception.status).upper()
+                ),
+                "transaction_id": next(
+                    (
+                        transaction.transaction_id
+                        for transaction in transactions
+                        if transaction.id == exception.transaction_id
+                    ),
+                    None,
+                ),
+                "retry_count": exception.retry_count,
                 "details": exception.details,
                 "created_at": exception.created_at.isoformat()
                 if exception.created_at
+                else None,
+                "resolved_at": exception.resolved_at.isoformat()
+                if exception.resolved_at
                 else None,
             }
             for exception in exceptions
@@ -605,6 +628,15 @@ def get_application_workspace(
                 "entity_type": audit.entity_type,
                 "details": audit.details,
                 "actor_id": audit.actor_id,
+                "actor_role": audit.actor_role,
+                "department_id": audit.department_id,
+                "resource_type": audit.resource or audit.entity_type,
+                "resource_id": audit.resource_id or audit.entity_id,
+                "transaction_id": str(audit.transaction_id)
+                if audit.transaction_id
+                else None,
+                "result": audit.result,
+                "metadata": audit.event_metadata or {},
                 "created_at": audit.occurred_at.isoformat()
                 if audit.occurred_at
                 else None,
@@ -678,14 +710,26 @@ def create_application(
         )
 
         # Log audit entry
-        audit = AuditLog(
+        record_audit(
+            db,
             action="APPLICATION_CREATED",
-            entity_type="service_application",
-            entity_id=str(app.id),
-            details=f"Application {app.reference_id} created for {svc.name} by {citizen.full_name}",
+            resource_type="service_application",
+            resource_id=app.id,
             actor_id=citizen.id,
+            actor_role=get_user_role_key(citizen),
+            role_id=citizen.role_id,
+            department_id=app.department_id,
+            metadata={"reference_id": app.reference_id, "service_id": svc.id},
         )
-        db.add(audit)
+        notification_service.create_event(
+            db,
+            event_type="APPLICATION_CREATED",
+            citizen_id=citizen.id,
+            department_id=app.department_id,
+            application_id=app.id,
+            title=f"{svc.name} application received",
+            message=f"Application {app.reference_id} was submitted and is awaiting department review.",
+        )
         db.commit()
 
         # Re-query to load all relationships
@@ -738,14 +782,34 @@ def update_application_status(
         app.remarks = payload.remarks
 
     # Log audit
-    audit = AuditLog(
-        action="APPLICATION_STATUS_UPDATED",
-        entity_type="service_application",
-        entity_id=str(app.id),
-        details=f"Status changed from {old_status} to {app.status}. Remarks: {payload.remarks}",
+    record_audit(
+        db,
+        action="APPLICATION_UPDATED",
+        resource_type="service_application",
+        resource_id=app.id,
         actor_id=current_user.id,
+        actor_role=get_user_role_key(current_user),
+        role_id=current_user.role_id,
+        department_id=app.department_id,
+        metadata={
+            "old_status": old_status.value,
+            "new_status": app.status.value,
+            "remarks_changed": payload.remarks is not None,
+        },
     )
-    db.add(audit)
+    if app.status != old_status or payload.remarks is not None:
+        notification_service.create_event(
+            db,
+            event_type="APPLICATION_UPDATED",
+            citizen_id=app.citizen_id,
+            department_id=app.department_id,
+            application_id=app.id,
+            title="Application updated",
+            message=(
+                f"Application {app.reference_id} status changed from "
+                f"{old_status.value} to {app.status.value}."
+            ),
+        )
     db.commit()
     db.refresh(app)
 

@@ -72,6 +72,49 @@ def test_scholarship_definition_uses_supported_steps_and_configured_transitions(
     assert definition.sla_hours is not None
 
 
+def test_ensure_definition_upgrades_legacy_scholarship_requirements():
+    db = _db_session()
+    try:
+        service = _configured_service(db, name="Post-Matric Scholarship")
+        legacy_template = {
+            **SCHOLARSHIP_WORKFLOW,
+            "required_records": [],
+            "required_consents": [],
+            "steps": [
+                {
+                    **step,
+                    "action": {},
+                }
+                if step["step_id"] in {"income_request", "education_request"}
+                else step
+                for step in SCHOLARSHIP_WORKFLOW["steps"]
+            ],
+        }
+        engine = WorkflowEngine()
+        legacy = engine.create_definition(
+            db,
+            WorkflowDefinitionCreate.model_validate(
+                {**legacy_template, "service_id": service.id}
+            ),
+        )
+        db.commit()
+
+        upgraded = engine.ensure_definition(db, service)
+
+        assert upgraded is not None
+        assert upgraded.id != legacy.id
+        assert legacy.status == "inactive"
+        assert set(upgraded.required_records) == {"Revenue", "Education"}
+        assert set(upgraded.required_consents) == set(
+            SCHOLARSHIP_WORKFLOW["required_consents"]
+        )
+        assert next(
+            step for step in upgraded.steps if step.step_key == "income_request"
+        ).action["data_requested"] == "Income Certificate"
+    finally:
+        db.close()
+
+
 def test_workflow_definition_rejects_unknown_transition_targets():
     config = {
         "service_id": 1,
@@ -161,6 +204,14 @@ def test_workflow_run_routes_branch_and_executes_notification():
             actor_id=citizen.id,
         )
         assert run.status == "completed"
-        assert db.query(app.models.Notification).filter_by(application_id=application.id).count() == 1
+        notifications = (
+            db.query(app.models.Notification)
+            .filter_by(application_id=application.id, recipient_id=citizen.id)
+            .all()
+        )
+        assert {notification.event_type for notification in notifications} == {
+            "APPLICATION_APPROVED",
+            "APPLICATION_UPDATED",
+        }
     finally:
         db.close()

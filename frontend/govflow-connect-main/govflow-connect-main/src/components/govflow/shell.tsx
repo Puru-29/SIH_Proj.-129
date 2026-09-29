@@ -12,7 +12,6 @@ import {
   Landmark,
   LayoutDashboard,
   LogOut,
-  MapPin,
   Menu,
   Search,
   Settings,
@@ -27,13 +26,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import {} from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu,
@@ -52,9 +45,6 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { useGovFlow } from "@/lib/govflow/store";
-import { DEPARTMENTS, LOCATIONS, SERVICES, USERS } from "@/lib/govflow/data";
-
-
 const NAV = [
   {
     group: "Overview",
@@ -94,15 +84,15 @@ export function AppShell({ children }: { children: ReactNode }) {
   const {
     user,
     signOut,
-    location,
-    locationId,
-    setLocationId,
     notifications,
     markAllRead,
     markRead,
     applications,
     workflows,
     integrations,
+    services,
+    departments,
+    users,
   } = useGovFlow();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -126,13 +116,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   const results = useMemo(
     () => ({
       applications: applications.slice(0, 30),
-      services: SERVICES,
-      departments: DEPARTMENTS,
+      services,
+      departments,
       workflows,
       integrations,
-      users: USERS,
+      users,
     }),
-    [applications, integrations, workflows],
+    [applications, departments, integrations, services, users, workflows],
   );
 
   const goFeature = (feature: string) => {
@@ -142,6 +132,13 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const goDetail = (feature: string, id: string) => {
     setSearchOpen(false);
+    if (feature === "applications") {
+      const application = applications.find((item) => item.id === id);
+      if (application?.backendId) {
+        navigate({ to: "/applications/$id", params: { id: String(application.backendId) } });
+        return;
+      }
+    }
     navigate({ to: "/$feature/$id", params: { feature, id } });
   };
 
@@ -232,20 +229,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             <button className="sm:hidden" onClick={() => setSearchOpen(true)} aria-label="Search">
               <Search className="size-5" />
             </button>
-            <Select value={locationId} onValueChange={setLocationId}>
-              <SelectTrigger className="hidden w-52.5 md:flex">
-                <MapPin className="size-4 text-teal" />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {LOCATIONS.map((l) => (
-                  <SelectItem key={l.id} value={l.id}>
-                    {l.city}, {l.state}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
             <Popover>
               <PopoverTrigger asChild>
                 <button
@@ -348,26 +331,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </header>
 
-        <div className="border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground md:hidden">
-          <Select value={locationId} onValueChange={setLocationId}>
-            <SelectTrigger className="w-full bg-card">
-              <MapPin className="size-4 text-teal" />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {LOCATIONS.map((l) => (
-                <SelectItem key={l.id} value={l.id}>
-                  {l.city}, {l.state}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
         <main className="min-w-0 flex-1 space-y-6 px-4 py-6 lg:px-6">{children}</main>
         <footer className="border-t border-border px-4 py-4 text-xs text-muted-foreground lg:px-6">
-          GovFlow · Government Interoperability &amp; Workflow Orchestration · Scope:{" "}
-          {location.city}, {location.state}
+          Government Interoperability &amp; Workflow Orchestration
         </footer>
       </div>
 

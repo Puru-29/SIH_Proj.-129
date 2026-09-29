@@ -7,7 +7,6 @@ Populates SQLite database (sih26129.db) with realistic Indian e-Governance mesh 
 - Government Services
 - Live Applications across all statuses (Approved, Under Review, Submitted, Rejected)
 - DPDP Data Share Consents
-- Immutable Audit Trails
 - Verified Documents
 """
 
@@ -20,7 +19,6 @@ from app.models.platform import DigitalPlatform, PlatformStatus
 from app.models.service import Service
 from app.models.application import ServiceApplication, ApplicationStatus
 from app.models.consent import DataShareConsent, ConsentStatus
-from app.models.audit import AuditLog
 from app.models.document import Document
 from app.core.security import hash_password
 
@@ -32,7 +30,6 @@ def seed_database(force: bool = False):
     try:
         if force:
             print("Force flag set: clearing existing data...")
-            db.query(AuditLog).delete()
             db.query(Document).delete()
             db.query(DataShareConsent).delete()
             db.query(ServiceApplication).delete()
@@ -347,46 +344,6 @@ def seed_database(force: bool = False):
         )
         db.add_all([d1, d2])
         db.flush()
-
-        print("Seeding Audit Logs...")
-        logs = [
-            AuditLog(
-                action="SYSTEM_INIT",
-                entity_type="mesh_kernel",
-                entity_id="0",
-                details="SIH26129 Inter-Governmental Mesh API initialized with 6 interconnected nodes.",
-                actor_id=admin.id,
-            ),
-            AuditLog(
-                action="CONSENT_GRANTED",
-                entity_type="data_share_consent",
-                entity_id=str(c_objects[0].id),
-                details=f"Consent granted for Aadhaar eKYC -> SAMARTH by {citizen_users[0].full_name}",
-                actor_id=citizen_users[0].id,
-            ),
-            AuditLog(
-                action="APPLICATION_CREATED",
-                entity_type="service_application",
-                entity_id=str(app_objects[0].id),
-                details=f"Application {app_objects[0].reference_id} created for {svc_sch.name}",
-                actor_id=citizen_users[0].id,
-            ),
-            AuditLog(
-                action="DOCUMENT_VERIFIED",
-                entity_type="document",
-                entity_id=str(d1.id),
-                details="Aadhaar Card verified with EasyOCR + LayoutLMv3 composite score 0.98",
-                actor_id=officer1.id,
-            ),
-            AuditLog(
-                action="APPLICATION_APPROVED",
-                entity_type="service_application",
-                entity_id=str(app_objects[0].id),
-                details="Post-Matric Scholarship approved by Tehsildar Rajesh Sharma",
-                actor_id=officer1.id,
-            ),
-        ]
-        db.add_all(logs)
 
         from app.services.service_config import ensure_service_catalog
         ensure_service_catalog(db)

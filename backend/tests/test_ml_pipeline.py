@@ -362,7 +362,7 @@ def test_interoperability_real_features(monkeypatch):
     assert anom_data["success"] is True
     assert anom_data["is_anomaly"] is True
 
-    # Full Verification endpoint
+    # The legacy text-only endpoint must not produce an unreviewed verdict.
     full_res = client.post("/api/v1/ml/verify-document", json={
         "document_text": "GOVERNMENT OF INDIA\nAadhaar: 5432 1098 4321\nName: Aarav Patil",
         "citizen_full_name": "Aarav Patil",
@@ -371,9 +371,8 @@ def test_interoperability_real_features(monkeypatch):
         "mesh_income": 100000.0,
         "preferred_tabular_engine": "xgboost",
     })
-    assert full_res.status_code == 200
-    assert full_res.json()["overall_verdict"] == "VERIFIED_AUTHENTIC"
-    assert len(full_res.json()["steps"]) == 6
+    assert full_res.status_code == 410
+    assert "human review" in full_res.json()["detail"]
     print("[PASS] All FastAPI endpoints passed.")
 
 

@@ -1,13 +1,8 @@
-import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session
 
-from app.database import get_db
-from app.api.deps import get_user_role_key, require_authenticated_user, require_role
-from app.models.application import ServiceApplication
-from app.models.audit import AuditLog
+from app.api.deps import require_authenticated_user, require_role
 from app.models.user import User
 from app.schemas.ml import (
     OCRRequest,
@@ -22,8 +17,6 @@ from app.schemas.ml import (
     DistilBertClassifyResponse,
     RiskAssessmentRequest,
     RiskAssessmentResponse,
-    FullVerificationRequest,
-    FullVerificationResponse,
     MLSystemStatusResponse,
     EngineStatusItem,
     AnomalyDetectionRequest,
@@ -36,7 +29,6 @@ from app.ml import (
     distilbert_engine,
     tabular_risk_engine,
     anomaly_engine,
-    verification_pipeline,
 )
 
 router = APIRouter(
@@ -219,79 +211,12 @@ def run_anomaly_detection(payload: AnomalyDetectionRequest):
     return AnomalyDetectionResponse(**result)
 
 
-@router.post("/verify-document", response_model=FullVerificationResponse)
-def run_full_document_verification(
-    payload: FullVerificationRequest,
-    db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_authenticated_user)],
-):
-    """
-    Executes the complete 5-stage automated AI verification pipeline:
-    1. EasyOCR (Text & Bounding Boxes)
-    2. LayoutLMv3 (Visual Layout & Tamper Detection)
-    3. spaCy NER (Indian Govt IDs & Profile Match)
-    4. DistilBERT (Semantic Intent & Urgency Routing)
-    5. XGBoost / LightGBM (Cross-Department Mesh Fraud Scoring)
-    
-    Automatically records an AuditLog and updates Document records in the database.
-    """
-    role_key = get_user_role_key(current_user)
-    target_user = current_user
-    if role_key == "citizen":
-        if payload.citizen_id is not None and payload.citizen_id != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Citizens may only verify their own documents.",
-            )
-        payload.citizen_id = current_user.id
-        payload.citizen_full_name = current_user.full_name
-        payload.citizen_aadhaar_last4 = current_user.aadhaar_last4
-    elif role_key == "department_officer":
-        if not payload.application_reference:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Department officers must provide an application in their department.",
-            )
-        application = (
-            db.query(ServiceApplication)
-            .filter(ServiceApplication.reference_id == payload.application_reference)
-            .first()
-        )
-        if application is None or application.department_id != current_user.department_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found.")
-        target_user = application.citizen
-        payload.citizen_id = target_user.id
-        payload.citizen_full_name = target_user.full_name
-        payload.citizen_aadhaar_last4 = target_user.aadhaar_last4
-
-    result = verification_pipeline.verify_document(
-        image_base64=payload.image_base64,
-        document_text=payload.document_text,
-        citizen_full_name=payload.citizen_full_name,
-        citizen_aadhaar_last4=payload.citizen_aadhaar_last4,
-        claimed_income=payload.claimed_income,
-        mesh_income=payload.mesh_income,
-        claimed_land_acres=payload.claimed_land_acres,
-        mesh_land_acres=payload.mesh_land_acres,
-        applicant_remarks=payload.applicant_remarks,
-        preferred_tabular_engine=payload.preferred_tabular_engine,
+@router.post("/verify-document", deprecated=True)
+def reject_unpersisted_document_verification():
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Automated text-only verdicts are no longer available. Upload a PDF or image "
+            "through /api/v1/documents/upload-and-verify; every result requires human review."
+        ),
     )
-
-    # Persist verification audit trail in database
-    audit = AuditLog(
-        action="AI_DOCUMENT_VERIFICATION",
-        entity_type="document",
-        entity_id=payload.application_reference or "REF_DIRECT_VERIFY",
-        details=json.dumps({
-            "verdict": result["overall_verdict"],
-            "fraud_risk_score": result["fraud_risk_score"],
-            "risk_level": result["risk_level"],
-            "doc_type": result["document_type_detected"],
-            "name_similarity": result["name_similarity"],
-        }),
-        actor_id=current_user.id,
-    )
-    db.add(audit)
-    db.commit()
-
-    return FullVerificationResponse(**result)

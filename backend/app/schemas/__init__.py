@@ -5,7 +5,7 @@ from app.schemas.service import ServiceCreate, ServiceRead
 from app.schemas.application import ApplicationCreate, ApplicationRead, ApplicationUpdate
 from app.schemas.consent import ConsentCreate, ConsentRead
 from app.schemas.document import DocumentCreate, DocumentRead
-from app.schemas.audit import AuditLogCreate, AuditLogRead
+from app.schemas.audit import AuditLogRead
 from app.schemas.ml import (
     OCRRequest,
     OCRResponse,
@@ -48,7 +48,6 @@ __all__ = [
     "ConsentRead",
     "DocumentCreate",
     "DocumentRead",
-    "AuditLogCreate",
     "AuditLogRead",
     "OCRRequest",
     "OCRResponse",

@@ -225,17 +225,19 @@ All versioned endpoints use the `/api/v1` prefix.
 
 | Area | Routes |
 | --- | --- |
-| System | `GET /system/health` (interoperability/system admin), `GET /info` |
+| System | `GET /api/system/health` and versioned `GET /api/v1/system/health` (government staff/admin/auditor; performs live connector probes), `GET /info` |
 | Authentication | `POST /auth/login`, `POST /auth/signup`, `POST /auth/register`, `POST /auth/oauth/token`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `GET/POST /auth/users`, `PATCH /auth/users/{id}` (system admin for user management) |
 | Departments | `GET /departments`, `GET /departments/{id}`, `POST /departments` |
 | Services | `GET /services`, `GET /services/{id}`, `GET /services/{id}/form-schema`, `POST /services` |
 | Applications | `GET /applications`, `POST /applications`, `GET /applications/{id}`, `GET /applications/track/{reference_id}`, `GET/PATCH /applications/{id}/workflow`, `PATCH /applications/{id}/status` |
-| Platforms | `GET /platforms`, `GET /platforms/{id}`, `POST /platforms`, `POST /platforms/{id}/ping` |
+| Platforms | `GET /platforms`, `GET /platforms/{id}`, `POST /platforms`, `POST /platforms/{id}/ping`; `GET /api/integrations/{id}/health` (also `/api/v1/integrations/{id}/health`) and `GET /integrations` execute connector health checks and return persisted probe history/transaction failure metrics |
 | Consents | `GET/POST /consents`, `GET /consents/{id}`, `POST /consents/{id}/revoke` |
 | Audit | `GET/POST /audit-logs` |
 | Statistics | `GET /stats/dashboard` |
-| Documents | `GET /documents`, `GET /documents/{id}`, `POST /documents/upload-and-verify` |
-| ML | `GET /ml/status` plus individual OCR, layout, NER, classification, risk, anomaly, and verification routes |
+| Documents | `GET /documents`, `GET /documents/{id}`, `GET /documents/{id}/file`, `POST /documents/upload-and-verify` (multipart PDF/JPG/PNG), `GET /documents/verifications`, `GET /documents/verifications/{id}`, `POST /documents/verifications/{id}/review` |
+| ML | `GET /ml/status` plus OCR, layout, NER, classification, risk, and anomaly routes; the legacy text-only `/ml/verify-document` returns `410 Gone` |
+
+Document uploads are stored under `backend/storage/documents/` and linked to an application. Results persist extracted fields, pipeline stages, file SHA-256, duplicate status, review indicators, and exact matches against stored verified source records. Every upload starts in `PENDING_REVIEW`; only an authorized department officer or system administrator can record a final review decision. The extraction confidence is a technical extraction signal, not an authenticity score or fraud probability. An officer can retrieve the original uploaded file through the access-controlled file route.
 
 Complete request and response schemas are available in Swagger at `/docs`.
 

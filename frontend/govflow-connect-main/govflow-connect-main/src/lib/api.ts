@@ -1,24 +1,6 @@
-/**
- * GovFlow Inter-Governmental Mesh API Client
- * Connects frontend directly to the FastAPI AI/ML Backend (port 8000).
- */
-
-export const API_BASE_URL =
-  (typeof window !== "undefined" && (window as any).__VITE_API_BASE_URL__) ||
-  import.meta.env["VITE_API_BASE_URL"] ||
-  import.meta.env["VITE_API_URL"] ||
-  "http://127.0.0.1:8000/api/v1";
-
-
-export const BACKEND_ROOT_URL = API_BASE_URL.replace(/\/api\/v1\/?$/, "");
-
-if (typeof window !== "undefined") {
-  try {
-    window.localStorage.removeItem("govflow_jwt_token");
-  } catch {
-    // Storage may be unavailable; tokens are never read from or written to it.
-  }
-}
+import axios from "axios";
+import { getAccessToken, setAccessToken } from "@/lib/auth-token";
+import { apiErrorMessage, authenticatedApiClient } from "@/lib/http";
 
 export interface ApiResponse<T> {
   data?: T;
@@ -33,7 +15,26 @@ export interface UserProfile {
   phone?: string | null;
   department?: string | null;
   aadhaar_last4?: string | null;
-  role: "citizen" | "officer" | "admin" | "developer" | "operator" | "auditor";
+  role:
+    | "citizen"
+    | "officer"
+    | "admin"
+    | "developer"
+    | "operator"
+    | "auditor"
+    | "department_officer"
+    | "system_admin"
+    | "interoperability_admin";
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface MeshUser {
+  id: number;
+  full_name: string;
+  email: string;
+  role: UserProfile["role"];
+  department?: string | null;
   is_active: boolean;
   created_at: string;
 }
@@ -68,7 +69,7 @@ export interface MeshNodePlatform {
   status: "active" | "degraded" | "offline";
   base_url?: string | null;
   api_version: string;
-    department?: string | null;
+  department?: string | null;
   description?: string | null;
   department_id: number;
 }
@@ -160,133 +161,143 @@ export interface MeshApplication {
     required?: boolean;
     action?: Record<string, unknown>;
     next_steps?: string[];
-  }
+    started_at?: string | null;
+    completed_at?: string | null;
+    error?: string | null;
+  }>;
+}
 
-  export interface GovernmentDashboard {
+export interface GovernmentDashboard {
+  department_name: string | null;
+  counts: {
+    pending_applications: number;
+    assigned_to_me: number;
+    sla_at_risk: number;
+    interdepartmental_requests: number;
+    data_verification_requests: number;
+    open_exceptions: number;
+    completed_today: number;
+  };
+  application_queue: Array<{
+    id: number;
+    reference_id: string;
+    citizen_name: string;
+    service_name: string;
+    status: string;
+    current_step: { name: string; type: string } | null;
+    sla_due_at: string | null;
+    assigned_officer_id: number | null;
+    assigned_officer_name: string | null;
+  }>;
+  recent_requests: Array<{
+    transaction_id: string;
+    application_id: number;
+    reference_id: string;
+    service_name: string;
+    source_department: string;
+    requesting_department: string;
+    data_requested: string;
+    status: string;
+    requested_at: string;
+  }>;
+  generated_at: string;
+}
+
+export interface ApplicationWorkspace {
+  application: MeshApplication;
+  citizen: {
+    id: number;
+    full_name: string;
+    email: string;
+    phone: string | null;
+    aadhaar_last4: string | null;
+  };
+  application_information: {
+    id: number;
+    reference_id: string;
+    status: string;
+    service_id: number;
+    service_name: string | null;
     department_name: string | null;
-    counts: {
-      pending_applications: number;
-      assigned_to_me: number;
-      sla_at_risk: number;
-      interdepartmental_requests: number;
-      data_verification_requests: number;
-      open_exceptions: number;
-      completed_today: number;
-    };
-    application_queue: Array<{
-      id: number;
-      reference_id: string;
-      citizen_name: string;
-      service_name: string;
-      status: string;
-      current_step: { name: string; type: string } | null;
-      sla_due_at: string | null;
-      assigned_officer_id: number | null;
-      assigned_officer_name: string | null;
-    }>;
-    recent_requests: Array<{
-      transaction_id: string;
-      application_id: number;
-      reference_id: string;
-      service_name: string;
-      source_department: string;
-      requesting_department: string;
-      data_requested: string;
-      status: string;
-      requested_at: string;
-    }>;
-    generated_at: string;
-  }
-
-  export interface ApplicationWorkspace {
-    application: MeshApplication;
-    citizen: {
-      id: number;
-      full_name: string;
-      email: string;
-      phone: string | null;
-      aadhaar_last4: string | null;
-    };
-    application_information: {
-      id: number;
-      reference_id: string;
-      status: string;
-      service_id: number;
-      service_name: string | null;
-      department_name: string | null;
-      submitted_at: string | null;
-      form_data: Record<string, unknown>;
-      sla_due_at: string | null;
-      assigned_officer_id: number | null;
-      assigned_officer_name: string | null;
-    };
-    verified_records: Array<{
-      id: string;
-      record_type: string;
-      status: string;
-      department: string | null;
-      source_record_id: string;
-      verified_at: string | null;
-      values: Record<string, string>;
-    }>;
-    documents: Array<{
-      id: number;
-      title: string;
-      doc_type: string;
-      is_verified: boolean;
-      verification_score: number | null;
-      fraud_risk_level: string | null;
-      created_at: string | null;
-    }>;
-    consents: Array<{
-      id: number;
-      purpose: string;
-      requested_data: string;
-      status: string;
-      source_department: string | null;
-      granted_at: string | null;
-      expires_at: string | null;
-      revoked_at: string | null;
-    }>;
-    transactions: Array<{
-      transaction_id: string;
-      status: string;
-      source_department: string;
-      requesting_department: string;
-      data_requested: string;
-      requested_at: string | null;
-      completed_at: string | null;
-      error_message: string | null;
-    }>;
-    transaction_events: Array<{
-      id: string;
-      transaction_id: number;
-      event_type: string;
-      status: string;
-      detail: string | null;
-      error_code: string | null;
-      error_message: string | null;
-      occurred_at: string | null;
-    }>;
-    workflow: NonNullable<MeshApplication["workflow"]>;
-    exceptions: Array<{
-      id: number;
-      system: string;
-      category: string;
-      message: string;
-      severity: string;
-      status: string;
-      details: Record<string, unknown> | null;
-      created_at: string | null;
-    }>;
-    audit_events: Array<{
-      id: string | number;
-      action: string;
-      entity_type: string;
-      details: string | null;
-      actor_id: number | null;
-      created_at: string | null;
-    }>;
+    submitted_at: string | null;
+    form_data: Record<string, unknown>;
+    sla_due_at: string | null;
+    assigned_officer_id: number | null;
+    assigned_officer_name: string | null;
+  };
+  verified_records: Array<{
+    id: string;
+    record_type: string;
+    status: string;
+    department: string | null;
+    source_record_id: string;
+    verified_at: string | null;
+    values: Record<string, string>;
+  }>;
+  documents: Array<{
+    id: number;
+    title: string;
+    doc_type: string;
+    is_verified: boolean;
+    verification_score: number | null;
+    fraud_risk_level: string | null;
+    created_at: string | null;
+  }>;
+  consents: Array<{
+    id: number;
+    purpose: string;
+    requested_data: string;
+    status: string;
+    source_department: string | null;
+    granted_at: string | null;
+    expires_at: string | null;
+    revoked_at: string | null;
+  }>;
+  transactions: Array<{
+    transaction_id: string;
+    status: string;
+    source_department: string;
+    requesting_department: string;
+    data_requested: string;
+    requested_at: string | null;
+    completed_at: string | null;
+    error_message: string | null;
+  }>;
+  transaction_events: Array<{
+    id: string;
+    transaction_id: number;
+    event_type: string;
+    status: string;
+    detail: string | null;
+    error_code: string | null;
+    error_message: string | null;
+    occurred_at: string | null;
+  }>;
+  workflow: NonNullable<MeshApplication["workflow"]>;
+  exceptions: Array<{
+    id: number;
+    system: string;
+    category: string;
+    message: string;
+    severity: string;
+    status: string;
+    details: Record<string, unknown> | null;
+    created_at: string | null;
+  }>;
+  audit_events: Array<{
+    id: string | number;
+    action: string;
+    entity_type: string;
+    details: string | null;
+    actor_id: number | null;
+    actor_role?: string | null;
+    department_id?: number | null;
+    resource_type?: string;
+    resource_id?: string;
+    transaction_id?: string | null;
+    result?: string;
+    metadata?: Record<string, unknown>;
+    created_at: string | null;
   }>;
 }
 
@@ -364,6 +375,193 @@ export interface MeshConsent {
   revoked_at?: string | null;
 }
 
+export interface MeshException {
+  id: number;
+  exceptionId?: number;
+  applicationId: string | null;
+  system: string;
+  sourceSystem?: string;
+  category: string;
+  type?: string;
+  message: string;
+  severity: string;
+  status: "OPEN" | "RETRYING" | "RESOLVED" | "ESCALATED" | "IGNORED";
+  transactionId?: string | null;
+  retryCount: number;
+  details: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt?: string | null;
+  resolvedAt?: string | null;
+}
+
+export interface MeshNotification {
+  id: number;
+  recipient_id: number;
+  event_type: string;
+  title: string;
+  message: string;
+  notification_type: string;
+  created_at: string;
+  read_at: string | null;
+  read: boolean;
+  application_id: number | null;
+  application_reference: string | null;
+  transaction_id: string | null;
+}
+
+export interface MeshDocument {
+  id: number;
+  title: string;
+  doc_type: string;
+  file_path: string;
+  mime_type: string;
+  owner_id: number;
+  application_id: number | null;
+  is_verified: boolean;
+  verification_score: number | null;
+  fraud_risk_level: string | null;
+  extracted_text: string | null;
+  extracted_entities: string | null;
+  created_at: string;
+}
+
+export interface MeshDocumentVerification {
+  id: number;
+  document_id: number;
+  file_sha256: string;
+  extracted_fields: Record<string, string | number>;
+  extraction_text: string;
+  pipeline_steps: Array<{
+    step: string;
+    status: string;
+    [key: string]: unknown;
+  }>;
+  verification_status: "PENDING_REVIEW" | "VERIFIED" | "REJECTED";
+  confidence: number;
+  source_match_status: "MATCHED" | "MISMATCHED" | "NOT_FOUND" | "NOT_CHECKED" | "UNAVAILABLE";
+  source_match: Record<string, unknown>;
+  duplicate_status: "UNIQUE" | "DUPLICATE";
+  tampering_indicators: string[];
+  reviewed_by: number | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  created_at: string;
+}
+
+export interface MeshDocumentVerificationResponse {
+  document: MeshDocument;
+  verification_result: MeshDocumentVerification;
+}
+
+export interface ConnectedSystemMetrics {
+  id: number;
+  system_name: string;
+  connectorMode: string | null;
+  slug: string;
+  name: string;
+  department: string | null;
+  connectionStatus: "connected" | "disconnected";
+  healthStatus: "active" | "degraded" | "offline";
+  responseTimeMs: number | null;
+  transactionResponseTimeMs: number | null;
+  lastSuccessfulRequestAt: string | null;
+  lastFailureAt: string | null;
+  lastFailureMessage: string | null;
+  failureCount: number;
+  transactionCount: number;
+  failedTransactionCount: number;
+  platformStatus: string;
+  isActive: boolean;
+  integrationType: string;
+  apiVersion: string;
+  status: "healthy" | "degraded" | "offline";
+  response_time: number;
+  last_successful_request: string | null;
+  last_failure: string | null;
+  failure_count: number;
+}
+
+export interface SystemHealth {
+  system_name: string;
+  status: "healthy" | "degraded";
+  response_time: number;
+  last_successful_request: string | null;
+  last_failure: string | null;
+  failure_count: number;
+  checked_at: string;
+  integrations: SystemHealthCheck[];
+}
+
+export interface SystemHealthCheck {
+  id: number;
+  slug: string;
+  name: string;
+  department: string | null;
+  system_name: string;
+  connector_mode: string | null;
+  connectorMode: string | null;
+  status: "healthy" | "degraded" | "offline";
+  response_time: number;
+  last_successful_request: string | null;
+  last_failure: string | null;
+  last_failure_message: string | null;
+  failure_count: number;
+}
+
+export interface InteroperabilityTransaction {
+  transactionId: string;
+  source: string;
+  destination: string;
+  sourceDepartment: string;
+  requestingDepartment: string;
+  dataRequested: string;
+  dataType: string;
+  transactionType: string;
+  status: string;
+  transactionStatus: string;
+  applicationId: number;
+  applicationReference: string | null;
+  consentId: number;
+  startedAt: string | null;
+  completedAt: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  timeline: Array<{
+    key: string;
+    label: string;
+    status: "completed" | "pending";
+    occurredAt: string | null;
+    detail: string | null;
+  }>;
+  events: Array<{
+    state: string;
+    type: string;
+    detail: string | null;
+    occurredAt: string | null;
+  }>;
+}
+
+export interface DataMappingConfiguration {
+  id: number;
+  name: string;
+  source: string;
+  target: string;
+  sourceSystemId: number;
+  sourceSystem: string | null;
+  targetSystemId: number;
+  targetSystem: string | null;
+  sourceSchemaVersion: string;
+  targetSchemaVersion: string;
+  version: number;
+  status: string;
+  rules: Array<{
+    sourceField: string;
+    targetField: string;
+    transformation: string | null;
+    required: boolean;
+  }>;
+}
+
 export interface InteroperabilityResult {
   status: string;
   transactionStatus: string;
@@ -377,48 +575,46 @@ export interface InteroperabilityResult {
 
 export interface MeshAuditLog {
   id: number;
+  timestamp: string;
+  actor_id: number | null;
+  actor_role: string | null;
+  actor_name: string | null;
+  department_id: number | null;
   action: string;
-  entity_type: string;
-  entity_id: string;
-  details?: string | null;
-  actor_id?: number | null;
-  actor_name?: string | null;
-  created_at: string;
+  resource_type: string;
+  resource_id: string;
+  transaction_id: string | null;
+  result: string;
+  metadata: Record<string, unknown>;
+  details: string | null;
 }
 
-export interface EngineStatusItem {
-  name: string;
-  type: string;
-  ready: boolean;
-  device: string;
-  version: string;
-  mode: string;
+export interface AuditLogFilters {
+  date?: string;
+  actor?: string;
+  department?: string;
+  action?: string;
+  transaction?: string;
+  resource?: string;
+  result?: string;
+  start_date?: string;
+  end_date?: string;
+  limit?: number;
+  offset?: number;
 }
 
-export interface MLSystemStatus {
-  status: string;
-  system_healthy?: boolean;
-  total_engines: number;
-  ready_count: number;
-  ready_engines?: number;
-  timestamp?: number;
-  engines: Record<string, EngineStatusItem>;
-}
-
-
-let accessToken: string | null = null;
 let refreshPromise: Promise<AuthResponse | null> | null = null;
 
 export function getStoredToken(): string | null {
-  return accessToken;
+  return getAccessToken();
 }
 
 export function setStoredToken(token: string): void {
-  accessToken = token;
+  setAccessToken(token);
 }
 
 export function clearStoredToken(): void {
-  accessToken = null;
+  setAccessToken(null);
 }
 
 async function refreshAccessToken(): Promise<AuthResponse | null> {
@@ -426,16 +622,7 @@ async function refreshAccessToken(): Promise<AuthResponse | null> {
 
   refreshPromise = (async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
-        method: "POST",
-        credentials: "include",
-      });
-      if (!response.ok) {
-        clearStoredToken();
-        return null;
-      }
-
-      const result = (await response.json()) as AuthResponse;
+      const { data: result } = await authenticatedApiClient.post<AuthResponse>("/auth/refresh");
       if (!result.access_token) {
         clearStoredToken();
         return null;
@@ -455,66 +642,38 @@ async function refreshAccessToken(): Promise<AuthResponse | null> {
 
 async function request<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
 ): Promise<{ data: T | null; error: string | null; status: number }> {
-  const url = endpoint.startsWith("http")
-    ? endpoint
-    : `${API_BASE_URL}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
-
   try {
-    const send = () => {
-      const headers = new Headers(options.headers);
-      if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-      const token = getStoredToken();
-      if (token) headers.set("Authorization", `Bearer ${token}`);
-      else headers.delete("Authorization");
-      return fetch(url, { ...options, headers, credentials: "include" });
-    };
-
-    let res = await send();
-    const isCredentialEndpoint = /^\/auth\/(login|signup|refresh|logout)(?:\?|$)/.test(endpoint);
-    if (res.status === 401 && !isCredentialEndpoint) {
-      const refreshed = await refreshAccessToken();
-      if (refreshed) res = await send();
-    }
-
-    const isJson = res.headers.get("content-type")?.includes("application/json");
-    const body = isJson ? await res.json() : null;
-
-    if (!res.ok) {
-      const errorMsg = Array.isArray(body?.detail)
-        ? body.detail[0]?.msg || `HTTP Error ${res.status}`
-        : body?.detail || `HTTP Error ${res.status}`;
-      return { data: null, error: errorMsg, status: res.status };
-    }
-
-    return { data: body as T, error: null, status: res.status };
-  } catch (err: any) {
+    const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
+    const response = await authenticatedApiClient.request<T>({
+      url: endpoint,
+      method: options.method ?? "GET",
+      data: options.body,
+      headers: {
+        ...Object.fromEntries(new Headers(options.headers).entries()),
+        ...(options.body && !isFormData ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    return { data: response.data, error: null, status: response.status };
+  } catch (err: unknown) {
+    const responseStatus = axios.isAxiosError(err) ? (err.response?.status ?? 0) : 0;
     return {
       data: null,
-      error: err.message || "Network request failed. Is the backend running on port 8000?",
-      status: 0,
+      error: apiErrorMessage(err),
+      status: responseStatus,
     };
   }
 }
 
 export const api = {
   // System Health
-  async getHealth(): Promise<{ status: string; app: string } | null> {
-    try {
-      const res = await fetch(`${BACKEND_ROOT_URL}/health`, {
-        signal: AbortSignal.timeout(3500),
-        credentials: "include",
-      });
-      if (res.ok) return await res.json();
-    } catch {
-      // ignore
+  async getSystemHealth(): Promise<SystemHealth> {
+    const res = await request<SystemHealth>("/system/health");
+    if (res.error || !res.data) {
+      throw new Error(res.error || "System health could not be loaded.");
     }
-    return null;
-  },
-
-  async getMLStatus(): Promise<MLSystemStatus | null> {
-    const res = await request<MLSystemStatus>("/ml/status");
     return res.data;
   },
 
@@ -578,6 +737,12 @@ export const api = {
     return res.data;
   },
 
+  async getUsers(): Promise<MeshUser[]> {
+    const res = await request<MeshUser[]>("/auth/users");
+    if (res.error || !res.data) throw new Error(res.error || "User records could not be loaded.");
+    return res.data;
+  },
+
   async restoreSession(): Promise<UserProfile | null> {
     const refreshed = await refreshAccessToken();
     if (!refreshed) return null;
@@ -636,9 +801,10 @@ export const api = {
   },
 
   async getApplication(id: number | string): Promise<MeshApplication | null> {
-    const endpoint = typeof id === "string" && !/^\d+$/.test(id)
-      ? `/applications/track/${encodeURIComponent(id)}`
-      : `/applications/${id}`;
+    const endpoint =
+      typeof id === "string" && !/^\d+$/.test(id)
+        ? `/applications/track/${encodeURIComponent(id)}`
+        : `/applications/${id}`;
     const res = await request<MeshApplication>(endpoint);
     return res.data;
   },
@@ -661,7 +827,7 @@ export const api = {
     const res = await request<MeshApplication>("/applications", {
       method: "POST",
       body: JSON.stringify({
-        reference_id: data.reference_id || `APP-2026-${Math.floor(10000 + Math.random() * 90000)}`,
+        ...(data.reference_id ? { reference_id: data.reference_id } : {}),
         citizen_id: data.citizen_id,
         service_id: data.service_id,
         remarks: data.remarks,
@@ -671,27 +837,40 @@ export const api = {
         location: data.location,
       }),
     });
-    if (res.error) throw new Error(res.error);
-    return res.data!;
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Application could not be created.");
+    }
+    return res.data;
   },
 
   async getApplicationWorkflow(id: number | string): Promise<MeshApplication["workflow"]> {
     const res = await request<MeshApplication["workflow"]>(`/applications/${id}/workflow`);
-    if (res.error) throw new Error(res.error);
-    return res.data || [];
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Application workflow could not be loaded.");
+    }
+    return res.data;
   },
 
   async getWorkflowDefinitions(serviceId?: number): Promise<WorkflowDefinition[]> {
     const query = serviceId === undefined ? "" : `?service_id=${serviceId}`;
     const res = await request<WorkflowDefinition[]>(`/workflows${query}`);
-    if (res.error) throw new Error(res.error);
-    return res.data || [];
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Workflow definitions could not be loaded.");
+    }
+    return res.data;
   },
 
   async getDocuments(ownerId: number): Promise<MeshDocument[]> {
     const res = await request<MeshDocument[]>(`/documents?owner_id=${ownerId}`);
-    if (res.error) throw new Error(res.error);
-    return res.data || [];
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Documents could not be loaded.");
+    }
+    return res.data;
+  },
+
+  async getDocument(documentId: number): Promise<MeshDocument | null> {
+    const res = await request<MeshDocument>(`/documents/${documentId}`);
+    return res.data;
   },
 
   async updateWorkflowStage(
@@ -700,7 +879,7 @@ export const api = {
     status: string,
     detail?: string,
     error?: string,
-    nextStep?: string
+    nextStep?: string,
   ): Promise<MeshApplication["workflow"]> {
     const res = await request<MeshApplication["workflow"]>(`/applications/${id}/workflow`, {
       method: "PATCH",
@@ -713,82 +892,184 @@ export const api = {
         next_step: nextStep,
       }),
     });
-    if (res.error) throw new Error(res.error);
-    return res.data || [];
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Workflow stage could not be updated.");
+    }
+    return res.data;
   },
 
   async updateApplicationStatus(
     id: number,
     status: string,
-    remarks?: string
+    remarks?: string,
   ): Promise<MeshApplication> {
     const res = await request<MeshApplication>(`/applications/${id}/status`, {
       method: "PATCH",
       body: JSON.stringify({ status, remarks }),
     });
-    if (res.error) throw new Error(res.error);
-    return res.data!;
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Application status could not be updated.");
+    }
+    return res.data;
   },
 
   // Mesh Platforms
   async getPlatforms(): Promise<MeshNodePlatform[]> {
     const res = await request<MeshNodePlatform[]>("/platforms");
-    if (res.error) throw new Error(res.error);
-    return res.data || [];
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Connected systems could not be loaded.");
+    }
+    return res.data;
   },
 
   async getDepartments(): Promise<MeshDepartment[]> {
     const res = await request<MeshDepartment[]>("/departments");
-    if (res.error) throw new Error(res.error);
-    return res.data || [];
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Departments could not be loaded.");
+    }
+    return res.data;
   },
 
-  async pingPlatform(
-    id: number
-  ): Promise<{ latency_ms: number; status: string; message: string }> {
-    const res = await request<any>(`/platforms/${id}/ping`, { method: "POST" });
-    if (res.error) throw new Error(res.error);
+  async pingPlatform(id: number): Promise<{ latency_ms: number; status: string; message: string }> {
+    const res = await request<{ latency_ms: number; status: string; message: string }>(
+      `/platforms/${id}/ping`,
+      { method: "POST" },
+    );
+    if (res.error || !res.data) {
+      throw new Error(res.error || "System health could not be checked.");
+    }
     return res.data;
   },
 
   // Services
   async getServices(): Promise<MeshService[]> {
     const res = await request<MeshService[]>("/services");
-    if (res.error) throw new Error(res.error);
-    return res.data || [];
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Services could not be loaded.");
+    }
+    return res.data;
   },
 
   async getServiceFormSchema(id: number | string): Promise<ServiceFormSchema> {
     const res = await request<ServiceFormSchema>(`/services/${id}/form-schema`);
-    if (res.error) throw new Error(res.error);
-    return res.data!;
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Service application details could not be loaded.");
+    }
+    return res.data;
   },
 
-  async getWorkflows(): Promise<any[]> {
-    const res = await request<any[]>("/workflows");
-    return res.data || [];
+  async getConnectedSystems(): Promise<ConnectedSystemMetrics[]> {
+    const res = await request<ConnectedSystemMetrics[]>("/integrations");
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Connected systems could not be loaded.");
+    }
+    return res.data;
   },
 
-  async getIntegrations(): Promise<any[]> {
-    const res = await request<any[]>("/integrations");
-    return res.data || [];
+  async getIntegrationHealth(id: number | string): Promise<ConnectedSystemMetrics> {
+    const res = await request<ConnectedSystemMetrics>(
+      `/integrations/${encodeURIComponent(String(id))}/health`,
+    );
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Connected system health could not be loaded.");
+    }
+    return res.data;
   },
 
-  async getExceptions(): Promise<any[]> {
-    const res = await request<any[]>("/exceptions");
-    return res.data || [];
+  async getInteroperabilityTransactions(): Promise<InteroperabilityTransaction[]> {
+    const res = await request<InteroperabilityTransaction[]>("/interoperability/transactions");
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Interoperability transactions could not be loaded.");
+    }
+    return res.data;
   },
 
-  async getDataMappings(): Promise<any[]> {
-    const res = await request<any[]>("/data-mapping");
-    return res.data || [];
+  async getInteroperabilityTransaction(id: string): Promise<InteroperabilityTransaction> {
+    const res = await request<InteroperabilityTransaction>(
+      `/interoperability/transactions/${encodeURIComponent(id)}`,
+    );
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Transaction details could not be loaded.");
+    }
+    return res.data;
+  },
+
+  async getExceptions(): Promise<MeshException[]> {
+    const res = await request<MeshException[]>("/exceptions?limit=100");
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Exceptions could not be loaded.");
+    }
+    return res.data;
+  },
+
+  async getNotifications(): Promise<MeshNotification[]> {
+    const res = await request<MeshNotification[]>("/notifications");
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Notifications could not be loaded.");
+    }
+    return res.data;
+  },
+
+  async markNotificationRead(id: number): Promise<MeshNotification> {
+    const res = await request<MeshNotification>(`/notifications/${id}/read`, {
+      method: "PATCH",
+    });
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Notification could not be marked as read.");
+    }
+    return res.data;
+  },
+
+  async updateException(
+    id: number,
+    payload: { status: MeshException["status"] },
+  ): Promise<MeshException> {
+    const res = await request<MeshException>(`/exceptions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Exception could not be updated.");
+    }
+    return res.data;
+  },
+
+  async retryException(id: number): Promise<{
+    status: "success" | "failure";
+    transactionStatus: string;
+    transactionId: string;
+    message: string;
+    exception: MeshException;
+  }> {
+    const res = await request<{
+      status: "success" | "failure";
+      transactionStatus: string;
+      transactionId: string;
+      message: string;
+      exception: MeshException;
+    }>(`/exceptions/${id}/retry`, { method: "POST" });
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Exception retry could not be completed.");
+    }
+    return res.data;
+  },
+
+  async getDataMappings(): Promise<DataMappingConfiguration[]> {
+    const res = await request<DataMappingConfiguration[]>("/data-mappings");
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Data mappings could not be loaded.");
+    }
+    return res.data;
   },
 
   // Consents
   async getConsents(citizen_id?: number): Promise<MeshConsent[]> {
     const q = citizen_id ? `?citizen_id=${citizen_id}` : "";
     const res = await request<MeshConsent[]>(`/consents${q}`);
-    return res.data || [];
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Consent requests could not be loaded.");
+    }
+    return res.data;
   },
 
   async createConsent(data: {
@@ -796,6 +1077,7 @@ export const api = {
     source_platform_id: number;
     target_platform_id: number;
     citizen_id: number;
+    application_id?: number;
     requested_data: string;
     requested_fields: string[];
   }): Promise<MeshConsent> {
@@ -803,24 +1085,30 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     });
-    if (res.error) throw new Error(res.error);
-    return res.data!;
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Consent request could not be created.");
+    }
+    return res.data;
   },
 
   async approveConsent(id: number): Promise<MeshConsent> {
     const res = await request<MeshConsent>(`/consents/${id}/approve`, {
       method: "POST",
     });
-    if (res.error) throw new Error(res.error);
-    return res.data!;
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Consent approval could not be saved.");
+    }
+    return res.data;
   },
 
   async rejectConsent(id: number): Promise<MeshConsent> {
     const res = await request<MeshConsent>(`/consents/${id}/reject`, {
       method: "POST",
     });
-    if (res.error) throw new Error(res.error);
-    return res.data!;
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Consent rejection could not be saved.");
+    }
+    return res.data;
   },
 
   async requestInteroperability(data: {
@@ -837,76 +1125,95 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     });
-    if (res.error) throw new Error(res.error);
-    return res.data!;
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Interoperability request could not be completed.");
+    }
+    return res.data;
   },
 
   async revokeConsent(id: number): Promise<MeshConsent> {
     const res = await request<MeshConsent>(`/consents/${id}/revoke`, {
       method: "POST",
     });
-    if (res.error) throw new Error(res.error);
-    return res.data!;
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Consent revocation could not be saved.");
+    }
+    return res.data;
   },
 
   // Audit Logs
-  async getAuditLogs(limit = 50, entityId?: string): Promise<MeshAuditLog[]> {
-    const query = new URLSearchParams({ limit: String(limit) });
-    if (entityId) query.set("entity_id", entityId);
+  async getAuditLogs(filters: AuditLogFilters = {}): Promise<MeshAuditLog[]> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    }
     const res = await request<MeshAuditLog[]>(`/audit-logs?${query.toString()}`);
-    return res.data || [];
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Audit logs could not be loaded.");
+    }
+    return res.data;
   },
 
   // AI & Machine Learning Pipeline
-  async verifyDocument(payload: {
-    title: string;
-    doc_type: string;
-    owner_id: number;
-    application_id?: number;
-    image_base64?: string;
-    document_text?: string;
-    citizen_full_name?: string;
-    citizen_aadhaar_last4?: string;
-    claimed_income?: number;
-    mesh_income?: number;
-    claimed_land_acres?: number;
-    mesh_land_acres?: number;
-    applicant_remarks?: string;
-  }): Promise<any> {
-    const res = await request<any>("/documents/upload-and-verify", {
+  async uploadAndVerifyDocument(
+    file: File,
+    applicationId: number,
+    documentType?: string,
+  ): Promise<MeshDocumentVerificationResponse> {
+    const form = new FormData();
+    form.set("file", file);
+    form.set("application_id", String(applicationId));
+    if (documentType) form.set("doc_type", documentType);
+    const res = await request<MeshDocumentVerificationResponse>("/documents/upload-and-verify", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: form,
     });
-    if (res.error) throw new Error(res.error);
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Document verification could not be started.");
+    }
     return res.data;
   },
 
-  async runOCR(rawTextHint?: string, imageBase64?: string): Promise<any> {
-    const res = await request<any>("/ml/ocr", {
-      method: "POST",
-      body: JSON.stringify({
-        raw_text_hint: rawTextHint,
-        image_base64: imageBase64,
-      }),
-    });
-    if (res.error) throw new Error(res.error);
+  async getDocumentVerifications(params?: {
+    applicationId?: number;
+    verificationStatus?: string;
+    limit?: number;
+  }): Promise<MeshDocumentVerificationResponse[]> {
+    const query = new URLSearchParams();
+    if (params?.applicationId) query.set("application_id", String(params.applicationId));
+    if (params?.verificationStatus) query.set("verification_status", params.verificationStatus);
+    if (params?.limit) query.set("limit", String(params.limit));
+    const res = await request<MeshDocumentVerificationResponse[]>(
+      `/documents/verifications?${query.toString()}`,
+    );
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Document verification results could not be loaded.");
+    }
     return res.data;
   },
 
-  async detectAnomaly(payload: {
-    annual_income_claimed: number;
-    annual_income_tax_mesh: number;
-    land_holding_acres_claimed: number;
-    land_holding_acres_registry: number;
-    ocr_confidence?: number;
-    name_match_score?: number;
-    past_rejections_count?: number;
-  }): Promise<any> {
-    const res = await request<any>("/ml/detect-anomaly", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    if (res.error) throw new Error(res.error);
+  async reviewDocumentVerification(
+    verificationId: number,
+    payload: { decision: "VERIFIED" | "REJECTED"; note: string },
+  ): Promise<MeshDocumentVerificationResponse> {
+    const res = await request<MeshDocumentVerificationResponse>(
+      `/documents/verifications/${verificationId}/review`,
+      { method: "POST", body: JSON.stringify(payload) },
+    );
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Document review could not be saved.");
+    }
     return res.data;
+  },
+
+  async downloadDocument(documentId: number): Promise<Blob> {
+    try {
+      const response = await authenticatedApiClient.get<Blob>(`/documents/${documentId}/file`, {
+        responseType: "blob",
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(apiErrorMessage(error));
+    }
   },
 };

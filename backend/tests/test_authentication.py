@@ -302,6 +302,15 @@ def test_backend_role_and_department_ownership_enforcement(auth_client):
     }
     assert client.get("/api/v1/auth/users", headers=admin_headers).status_code == 200
     assert client.get("/api/v1/audit-logs", headers=admin_headers).status_code == 200
+    citizen_login_audit = client.get(
+        "/api/v1/audit-logs?action=LOGIN&actor=2",
+        headers=admin_headers,
+    )
+    assert citizen_login_audit.status_code == 200
+    assert any(
+        row["actor_role"] == "citizen" and row["result"] == "success"
+        for row in citizen_login_audit.json()
+    )
     created_officer = client.post(
         "/api/v1/auth/users",
         headers=admin_headers,

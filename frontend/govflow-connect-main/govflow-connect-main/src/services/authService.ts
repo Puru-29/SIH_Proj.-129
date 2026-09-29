@@ -1,51 +1,53 @@
 import { api } from "@/lib/api";
+import type { AuthResponse } from "@/lib/api";
 import type { CitizenProfile } from "./api";
 
-export async function loginCitizen(email: string, password: string): Promise<CitizenProfile> {
-  if (!email || !password) {
-    throw new Error("Please enter your email and password.");
-  }
+export async function authenticate(email: string, password: string): Promise<AuthResponse> {
+  return api.login(email, password);
+}
 
-  const result = await api.login(email, password);
-  if (result.user.role !== "citizen") {
-    throw new Error("This account is not a citizen account.");
-  }
-
+function citizenProfile(
+  profile: NonNullable<Awaited<ReturnType<typeof api.getMe>>>,
+): CitizenProfile {
   return {
-    id: String(result.user.id),
-    citizenId: `CIT-${String(result.user.id).padStart(6, "0")}`,
-    fullName: result.user.full_name,
-    email: result.user.email,
-    phone: result.user.phone || "",
-    address: "",
-    preferredLanguage: "English",
-    verifiedMobile: Boolean(result.user.phone),
-    verifiedEmail: true,
+    id: String(profile.id),
+    citizenId: String(profile.id),
+    fullName: profile.full_name,
+    email: profile.email,
+    phone: profile.phone ?? "",
+    ...(profile.aadhaar_last4 !== undefined ? { aadhaarLast4: profile.aadhaar_last4 } : {}),
   };
 }
 
-export async function registerCitizen(payload: Partial<CitizenProfile> & { fullName: string; email: string; phone: string; password: string }): Promise<CitizenProfile> {
+export async function getCitizenProfile(): Promise<CitizenProfile | null> {
+  const profile = await api.getMe();
+  return profile?.role === "citizen" ? citizenProfile(profile) : null;
+}
+
+export async function loginCitizen(email: string, password: string): Promise<CitizenProfile> {
+  const result = await api.login(email, password);
+  if (result.user.role !== "citizen") {
+    await api.logout();
+    throw new Error("This account is not a citizen account.");
+  }
+  return citizenProfile(result.user);
+}
+
+export async function registerCitizen(payload: {
+  fullName: string;
+  email: string;
+  phone: string;
+  password: string;
+}): Promise<CitizenProfile> {
   const result = await api.signup({
     full_name: payload.fullName,
     email: payload.email,
-    password: payload.password,
     phone: payload.phone,
+    password: payload.password,
   });
-
-  return {
-    id: String(result.user.id),
-    citizenId: `CIT-${String(result.user.id).padStart(6, "0")}`,
-    fullName: result.user.full_name,
-    email: result.user.email,
-    phone: result.user.phone || payload.phone,
-    address: "",
-    preferredLanguage: "English",
-    verifiedMobile: Boolean(result.user.phone),
-    verifiedEmail: true,
-  };
+  return citizenProfile(result.user);
 }
 
-export async function signOutCitizen(): Promise<boolean> {
+export async function signOutCitizen(): Promise<void> {
   await api.logout();
-  return true;
 }

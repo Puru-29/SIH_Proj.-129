@@ -7,15 +7,15 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models.application import ApplicationStatus, ServiceApplication
 from app.models.application_event import ApplicationEvent
-from app.models.audit import AuditLog
 from app.models.consent import ConsentStatus, DataShareConsent
 from app.models.document import Document
 from app.models.government_record import GovernmentRecord
-from app.models.notification import Notification
 from app.models.service import Service
 from app.models.transaction import InteroperabilityTransaction
 from app.models.workflow import Workflow, WorkflowStep
 from app.schemas.workflow import WorkflowDefinitionCreate
+from app.services.audit_service import record_audit
+from app.services.notification_service import notification_service
 
 
 SCHOLARSHIP_WORKFLOW: dict[str, Any] = {
@@ -45,7 +45,12 @@ SCHOLARSHIP_WORKFLOW: dict[str, Any] = {
             "type": "DATA_REQUEST",
             "order": 1,
             "required": True,
-            "action": {"record": "income", "consent": "Verified household income record"},
+            "action": {
+                "record": "income",
+                "data_requested": "Income Certificate",
+                "consent": "Verified household income record",
+                "consent_field": "consent_income",
+            },
             "next_steps": ["education_request"],
         },
         {
@@ -55,7 +60,12 @@ SCHOLARSHIP_WORKFLOW: dict[str, Any] = {
             "type": "DATA_REQUEST",
             "order": 2,
             "required": True,
-            "action": {"record": "student_enrollment", "consent": "Student enrolment and academic record"},
+            "action": {
+                "record": "student_enrollment",
+                "data_requested": "Student Verification",
+                "consent": "Student enrolment and academic record",
+                "consent_field": "consent_education",
+            },
             "next_steps": ["documents"],
         },
         {
@@ -163,6 +173,35 @@ class WorkflowEngineError(ValueError):
 
 
 class WorkflowEngine:
+    @staticmethod
+    def _is_current_scholarship_definition(definition: Workflow) -> bool:
+        required_actions = {
+            "income_request": {
+                "data_requested": "Income Certificate",
+                "consent": "Verified household income record",
+                "consent_field": "consent_income",
+            },
+            "education_request": {
+                "data_requested": "Student Verification",
+                "consent": "Student enrolment and academic record",
+                "consent_field": "consent_education",
+            },
+        }
+        actions = {step.step_key: step.action or {} for step in definition.steps}
+        return (
+            set(definition.required_records or [])
+            == set(SCHOLARSHIP_WORKFLOW["required_records"])
+            and set(definition.required_consents or [])
+            == set(SCHOLARSHIP_WORKFLOW["required_consents"])
+            and all(
+                all(
+                    actions.get(step_key, {}).get(key) == value
+                    for key, value in expected.items()
+                )
+                for step_key, expected in required_actions.items()
+            )
+        )
+
     def latest_definition(self, db: Session, service_id: int) -> Workflow | None:
         return (
             db.query(Workflow)
@@ -178,10 +217,13 @@ class WorkflowEngine:
 
     def ensure_definition(self, db: Session, service: Service) -> Workflow | None:
         definition = self.latest_definition(db, service.id)
-        if definition is not None:
-            return definition
         service_key = f"{service.code} {service.name}".casefold()
-        if "post_matric" in service_key or "post-matric" in service_key:
+        is_scholarship = "post_matric" in service_key or "post-matric" in service_key
+        if definition is not None and (
+            not is_scholarship or self._is_current_scholarship_definition(definition)
+        ):
+            return definition
+        if is_scholarship:
             template = SCHOLARSHIP_WORKFLOW
         else:
             department = service.department.name if service.department else "Service Department"
@@ -263,6 +305,9 @@ class WorkflowEngine:
         self,
         db: Session,
         payload: WorkflowDefinitionCreate,
+        *,
+        actor_id: int | None = None,
+        audit_action: str = "WORKFLOW_CREATED",
     ) -> Workflow:
         service = db.query(Service).filter(Service.id == payload.service_id).first()
         if service is None:
@@ -310,6 +355,21 @@ class WorkflowEngine:
             for step in sorted(payload.steps, key=lambda item: item.order)
         ]
         db.add(definition)
+        db.flush()
+        if actor_id is not None:
+            record_audit(
+                db,
+                action=audit_action,
+                resource_type="workflow_definition",
+                resource_id=definition.id,
+                actor_id=actor_id,
+                department_id=service.department_id,
+                metadata={
+                    "service_id": service.id,
+                    "version": definition.version,
+                    "workflow_name": definition.name,
+                },
+            )
         db.commit()
         db.refresh(definition)
         return definition
@@ -450,15 +510,48 @@ class WorkflowEngine:
                 note=detail or error or step.name,
             )
         )
-        db.add(
-            AuditLog(
-                action="WORKFLOW_STEP_" + next_status.upper(),
-                entity_type="workflow_step",
-                entity_id=str(step.id),
-                details=f"{run.name}: {step.step_key} {next_status}.",
-                actor_id=actor_id,
-            )
+        decision_action = (
+            "APPLICATION_APPROVED"
+            if next_status == "completed" and step.step_type == "APPROVAL"
+            else "APPLICATION_REJECTED"
+            if next_status == "completed" and step.step_type == "REJECTION"
+            else None
         )
+        record_audit(
+            db,
+            action=decision_action or "WORKFLOW_STEP_" + next_status.upper(),
+            resource_type="service_application"
+            if decision_action
+            else "workflow_step",
+            resource_id=application.id if decision_action else step.id,
+            actor_id=actor_id,
+            department_id=application.department_id,
+            metadata={
+                "workflow_id": run.id,
+                "step_key": step.step_key,
+                "step_status": next_status,
+                "application_status": application.status.value,
+            },
+            details=f"{run.name}: {step.step_key} {next_status}.",
+        )
+        if decision_action is not None:
+            notification_service.create_event(
+                db,
+                event_type=decision_action,
+                citizen_id=application.citizen_id,
+                department_id=application.department_id,
+                application_id=application.id,
+                title=(
+                    "Application approved"
+                    if decision_action == "APPLICATION_APPROVED"
+                    else "Application rejected"
+                ),
+                message=(
+                    f"Application {application.reference_id} was "
+                    f"{application.status.value}."
+                    + (f" {detail}" if detail else "")
+                ),
+            )
         db.commit()
         db.refresh(run)
         return run
@@ -664,15 +757,14 @@ class WorkflowEngine:
         now: datetime,
     ) -> None:
         action = step.action or {}
-        db.add(
-            Notification(
-                recipient_id=application.citizen_id,
-                application_id=application.id,
-                notification_type="Workflow",
-                title=action.get("title") or step.name,
-                message=action.get("message") or step.detail or step.name,
-                status="unread",
-            )
+        notification_service.create_notification(
+            db=db,
+            citizen_id=application.citizen_id,
+            application_id=application.id,
+            kind="Workflow",
+            title=action.get("title") or step.name,
+            message=action.get("message") or step.detail or step.name,
+            event_type="APPLICATION_UPDATED",
         )
         step.status = "completed"
         step.completed_at = now

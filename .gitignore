@@ -17,6 +17,7 @@ __pycache__/
 *.db
 *.sqlite3
 backend/*.db
+backend/storage/documents/
 
 # Environment variables & secrets
 .env

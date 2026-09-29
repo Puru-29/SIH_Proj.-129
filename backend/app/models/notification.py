@@ -24,6 +24,7 @@ class Notification(PublicUUIDMixin, TimestampMixin, Base):
         index=True,
     )
     notification_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(24), default="unread", nullable=False, index=True)

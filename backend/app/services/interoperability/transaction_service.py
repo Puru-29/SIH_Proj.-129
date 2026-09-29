@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.transaction import InteroperabilityTransaction
 from app.models.transaction_event import TransactionEvent
+from app.services.audit_service import record_audit
 
 
 TRANSACTION_STATES = {
@@ -63,6 +64,19 @@ class TransactionService:
         db.add(transaction)
         db.flush()
         self._event(db, transaction, "CREATED", "Interoperability request received.")
+        record_audit(
+            db,
+            action="INTEROPERABILITY_REQUEST_CREATED",
+            resource_type="interoperability_transaction",
+            resource_id=transaction.transaction_id,
+            actor_id=citizen_id,
+            actor_role="citizen",
+            department_id=transaction.application.department_id
+            if transaction.application
+            else None,
+            transaction=transaction,
+            metadata={"status": transaction.status},
+        )
         db.commit()
         return transaction
 
@@ -96,6 +110,43 @@ class TransactionService:
             error_message=error_message,
             occurred_at=datetime.now(timezone.utc),
         )
+        audit_actions = {
+            "DATA_REQUESTED": "DATA_REQUESTED",
+            "DATA_RECEIVED": "DATA_RECEIVED",
+            "DATA_VALIDATED": "DATA_VALIDATED",
+            "DATA_NORMALIZED": "DATA_NORMALIZED",
+            "APPLICATION_UPDATED": "APPLICATION_UPDATED",
+            "CONFLICT": "DATA_CONFLICT",
+            "RETRYING": "INTEROPERABILITY_RETRIED",
+        }
+        audit_action = audit_actions.get(state)
+        if audit_action:
+            record_audit(
+                db,
+                action=audit_action,
+                resource_type="interoperability_transaction",
+                resource_id=transaction.transaction_id,
+                actor_id=transaction.citizen_id,
+                actor_role="citizen",
+                department_id=transaction.application.department_id
+                if transaction.application
+                else None,
+                transaction=transaction,
+                result="in_progress"
+                if state == "RETRYING"
+                else "conflict"
+                if state == "CONFLICT"
+                else "success",
+                metadata={
+                    "status": state,
+                    "error_code": error_code,
+                    **(
+                        {"attempt": event_data["attempt"]}
+                        if event_data and "attempt" in event_data
+                        else {}
+                    ),
+                },
+            )
         db.commit()
 
     @staticmethod

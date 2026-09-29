@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.api.v1.router import api_v1_router
+from app.api.v1.system import router as system_health_router
+from app.api.v1.interoperability import unversioned_health_router
 
 
 app = FastAPI(
@@ -20,6 +22,8 @@ app.add_middleware(
 )
 
 app.include_router(api_v1_router, prefix="/api/v1")
+app.include_router(system_health_router, prefix="/api")
+app.include_router(unversioned_health_router, prefix="/api")
 
 
 @app.get("/", tags=["System"])

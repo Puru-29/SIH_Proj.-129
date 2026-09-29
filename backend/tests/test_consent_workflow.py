@@ -141,7 +141,7 @@ class _FakeSession:
         pass
 
 
-def test_approval_sets_grant_and_expiration_timestamps():
+def test_approval_sets_grant_and_expiration_timestamps(monkeypatch):
     consent = SimpleNamespace(
         id=12,
         citizen_id=7,
@@ -149,6 +149,15 @@ def test_approval_sets_grant_and_expiration_timestamps():
         granted_at=None,
         expires_at=None,
         revoked_at=None,
+        requesting_department_id=20,
+        application_id=None,
+        requested_data="Income and identity",
+        purpose="Scholarship eligibility",
+    )
+    monkeypatch.setattr(
+        consent_service_module.notification_service,
+        "create_event",
+        lambda *_args, **_kwargs: [],
     )
     service = ConsentService()
 
@@ -166,8 +175,8 @@ def test_request_stores_requested_fields_and_notifies_citizen(monkeypatch):
     notifications = []
     monkeypatch.setattr(
         consent_service_module.notification_service,
-        "create_notification",
-        lambda **kwargs: notifications.append(kwargs),
+        "create_event",
+        lambda _db, **kwargs: notifications.append(kwargs),
     )
     source = ConnectedSystem(
         id=1,
@@ -205,3 +214,4 @@ def test_request_stores_requested_fields_and_notifies_citizen(monkeypatch):
     ]
     assert notifications[0]["citizen_id"] == 7
     assert notifications[0]["application_id"] is None
+    assert notifications[0]["event_type"] == "CONSENT_REQUIRED"

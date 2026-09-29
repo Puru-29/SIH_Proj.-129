@@ -29,11 +29,11 @@ from app.core.security import (
 )
 from app.database import get_db
 from app.models.auth_session import AuthSession
-from app.models.audit import AuditLog
 from app.models.department import Department
 from app.models.role import Role
 from app.models.user import User, UserRole
 from app.schemas.user import UserCreate, UserRead
+from app.services.audit_service import record_audit
 
 router = APIRouter(prefix="/auth", tags=["Authentication & Identity"])
 REFRESH_COOKIE_NAME = "govflow_refresh_token"
@@ -156,7 +156,9 @@ def _check_department(
     return department
 
 
-def _create_auth_session(user: User, db: Session) -> tuple[str, str]:
+def _create_auth_session(
+    user: User, db: Session, *, audit_action: str = "LOGIN"
+) -> tuple[str, str]:
     now = datetime.now(timezone.utc)
     session_id = uuid4()
     role_key = get_user_role_key(user)
@@ -175,6 +177,17 @@ def _create_auth_session(user: User, db: Session) -> tuple[str, str]:
             refresh_token_hash=hash_token(refresh_token),
             expires_at=now + timedelta(days=settings.refresh_token_expire_days),
         )
+    )
+    record_audit(
+        db,
+        action=audit_action,
+        actor_id=user.id,
+        actor_role=get_user_role_key(user),
+        role_id=user.role_id,
+        department_id=user.department_id,
+        resource_type="auth_session",
+        resource_id=str(session_id),
+        metadata={"session_id": str(session_id)},
     )
     db.commit()
     return access_token, refresh_token
@@ -196,12 +209,40 @@ def _authenticate(db: Session, email: str, password: str) -> User:
         .first()
     )
     if user is None or not verify_password(password, user.hashed_password):
+        attempt_id = uuid4()
+        record_audit(
+            db,
+            action="LOGIN",
+            actor_id=user.id if user else None,
+            actor_role=get_user_role_key(user) if user else None,
+            role_id=user.role_id if user else None,
+            department_id=user.department_id if user else None,
+            resource_type="auth_session",
+            resource_id=str(attempt_id),
+            result="failure",
+            metadata={"attempt_id": str(attempt_id), "reason": "invalid_credentials"},
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
             headers={"WWW-Authenticate": "Bearer"},
         )
     if not user.is_active:
+        attempt_id = uuid4()
+        record_audit(
+            db,
+            action="LOGIN",
+            actor_id=user.id,
+            actor_role=get_user_role_key(user),
+            role_id=user.role_id,
+            department_id=user.department_id,
+            resource_type="auth_session",
+            resource_id=str(attempt_id),
+            result="failure",
+            metadata={"attempt_id": str(attempt_id), "reason": "account_deactivated"},
+        )
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is deactivated.",
@@ -210,9 +251,15 @@ def _authenticate(db: Session, email: str, password: str) -> User:
 
 
 def _start_session(
-    user: User, db: Session, response: Response
+    user: User,
+    db: Session,
+    response: Response,
+    *,
+    audit_action: str = "LOGIN",
 ) -> TokenResponse:
-    access_token, refresh_token = _create_auth_session(user, db)
+    access_token, refresh_token = _create_auth_session(
+        user, db, audit_action=audit_action
+    )
     _set_refresh_cookie(response, refresh_token)
     return _token_response(user, access_token)
 
@@ -251,7 +298,7 @@ def signup(
     db.add(user)
     db.flush()
     db.refresh(user)
-    return _start_session(user, db, response)
+    return _start_session(user, db, response, audit_action="ACCOUNT_REGISTERED")
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -363,6 +410,17 @@ def _create_rotated_tokens(
     auth_session.refresh_token_hash = hash_token(refresh_token)
     auth_session.last_used_at = now
     auth_session.expires_at = now + timedelta(days=settings.refresh_token_expire_days)
+    record_audit(
+        db,
+        action="TOKEN_REFRESHED",
+        resource_type="auth_session",
+        resource_id=session_id,
+        actor_id=user.id,
+        actor_role=get_user_role_key(user),
+        role_id=user.role_id,
+        department_id=user.department_id,
+        metadata={"session_id": str(session_id)},
+    )
     db.commit()
     return access_token, refresh_token
 
@@ -415,6 +473,23 @@ def logout(
             )
         ):
             auth_session.revoked_at = now
+            user = (
+                db.query(User)
+                .options(joinedload(User.role_record))
+                .filter(User.id == user_id)
+                .first()
+            )
+            record_audit(
+                db,
+                action="LOGOUT",
+                resource_type="auth_session",
+                resource_id=session_id,
+                actor_id=user_id,
+                actor_role=get_user_role_key(user) if user else None,
+                role_id=user.role_id if user else None,
+                department_id=user.department_id if user else None,
+                metadata={"session_id": str(session_id)},
+            )
             db.commit()
     _clear_refresh_cookie(response)
     response.status_code = status.HTTP_204_NO_CONTENT
@@ -477,19 +552,16 @@ def create_managed_user(
     )
     db.add(user)
     db.flush()
-    db.add(
-        AuditLog(
-            action="USER_CREATED",
-            entity_type="user",
-            entity_id=str(user.id),
-            details=f"System administrator created account with role {payload.role}.",
-            actor_id=_admin.id,
-            actor_role=get_user_role_key(_admin),
-            role_id=_admin.role_id,
-            department_id=_admin.department_id,
-            resource="user",
-            resource_id=str(user.id),
-        )
+    record_audit(
+        db,
+        action="USER_CREATED",
+        resource_type="user",
+        resource_id=user.id,
+        actor_id=_admin.id,
+        actor_role=get_user_role_key(_admin),
+        role_id=_admin.role_id,
+        department_id=_admin.department_id,
+        metadata={"role": payload.role, "department_id": user.department_id},
     )
     db.commit()
     db.refresh(user)
@@ -533,23 +605,23 @@ def update_managed_user(
                 AuthSession.user_id == user.id,
                 AuthSession.revoked_at.is_(None),
             ).update({AuthSession.revoked_at: datetime.now(timezone.utc)})
-    db.add(
-        AuditLog(
-            action="USER_ACCESS_UPDATED",
-            entity_type="user",
-            entity_id=str(user.id),
-            details=(
-                f"Role: {old_role} -> {next_role}; department: "
-                f"{old_department_id} -> {user.department_id}; active: "
-                f"{old_is_active} -> {user.is_active}."
-            ),
-            actor_id=_admin.id,
-            actor_role=get_user_role_key(_admin),
-            role_id=_admin.role_id,
-            department_id=_admin.department_id,
-            resource="user",
-            resource_id=str(user.id),
-        )
+    record_audit(
+        db,
+        action="USER_ACCESS_UPDATED",
+        resource_type="user",
+        resource_id=user.id,
+        actor_id=_admin.id,
+        actor_role=get_user_role_key(_admin),
+        role_id=_admin.role_id,
+        department_id=_admin.department_id,
+        metadata={
+            "old_role": old_role,
+            "new_role": next_role,
+            "old_department_id": old_department_id,
+            "new_department_id": user.department_id,
+            "old_is_active": old_is_active,
+            "new_is_active": user.is_active,
+        },
     )
     db.commit()
     db.refresh(user)

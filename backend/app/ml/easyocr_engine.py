@@ -80,6 +80,7 @@ class EasyOCREngine:
         image_input: str | None = None,
         raw_text_hint: str | None = None,
         languages: list[str] | None = None,
+        allow_fallback: bool = True,
     ) -> dict[str, Any]:
         """
         Extracts text and bounding boxes from image using EasyOCR.
@@ -124,7 +125,7 @@ class EasyOCREngine:
                     logger.error(f"Error during EasyOCR inference: {e}")
 
         # Fallback / simulated extraction if EasyOCR not loaded or test input provided
-        if not full_text_list and (raw_text_hint or image_input):
+        if allow_fallback and not full_text_list and (raw_text_hint or image_input):
             fallback_text = raw_text_hint or (
                 "GOVERNMENT OF INDIA\n"
                 "Unique Identification Authority of India\n"

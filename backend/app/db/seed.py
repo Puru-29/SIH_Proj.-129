@@ -10,7 +10,6 @@ from app.models import (
     ServiceApplication,
     DataShareConsent,
     Document,
-    AuditLog,
 )
 from app.models.user import UserRole
 from app.models.platform import PlatformStatus
@@ -208,15 +207,6 @@ def seed_database():
         )
         db.add_all([doc1, doc2])
 
-        print("Seeding audit log...")
-        audit = AuditLog(
-            action="INITIAL_SEED",
-            entity_type="System",
-            entity_id="INIT_01",
-            details="Seeded initial demo departments, platforms, services, and users for SIH26129",
-            actor_id=admin.id,
-        )
-        db.add(audit)
         db.commit()
 
         print("Database seeded successfully with all models and initial data!")

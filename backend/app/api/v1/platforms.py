@@ -7,10 +7,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.api.deps import require_role
+from app.api.deps import get_user_role_key, require_role
 from app.models.platform import DigitalPlatform, PlatformStatus
 from app.models.user import User
 from app.schemas.platform import PlatformCreate, PlatformRead
+from app.services.audit_service import record_audit
 
 router = APIRouter(prefix="/platforms", tags=["Digital Platforms & Mesh Nodes"])
 
@@ -86,6 +87,18 @@ def create_platform(
         department_id=payload.department_id,
     )
     db.add(platform)
+    db.flush()
+    record_audit(
+        db,
+        action="CONNECTED_SYSTEM_CREATED",
+        resource_type="connected_system",
+        resource_id=platform.id,
+        actor_id=_admin.id,
+        actor_role=get_user_role_key(_admin),
+        role_id=_admin.role_id,
+        department_id=platform.department_id,
+        metadata={"slug": platform.slug},
+    )
     db.commit()
     db.refresh(platform)
     return platform

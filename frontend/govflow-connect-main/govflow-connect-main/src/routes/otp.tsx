@@ -21,7 +21,8 @@ export const Route = createFileRoute("/otp")({
       { title: "Verify OTP — GovFlow" },
       {
         name: "description",
-        content: "Mobile OTP sign-in is unavailable because backend authentication has no OTP endpoint.",
+        content:
+          "Mobile OTP sign-in is unavailable because backend authentication has no OTP endpoint.",
       },
       { property: "og:title", content: "Verify OTP — GovFlow" },
       {
@@ -48,7 +49,9 @@ function OtpPage() {
   const verify = () => {
     setError("");
     if (code.length !== 6) return setError("Enter all 6 digits of the OTP.");
-    setError("Mobile OTP sign-in is unavailable because backend authentication does not provide an OTP endpoint. Use email and password.");
+    setError(
+      "Mobile OTP sign-in is unavailable because backend authentication does not provide an OTP endpoint. Use email and password.",
+    );
   };
 
   return (
@@ -82,7 +85,9 @@ function OtpPage() {
             disabled={seconds > 0}
             onClick={() => {
               setSeconds(30);
-              setError("OTP resend is unavailable because backend authentication does not provide an OTP endpoint.");
+              setError(
+                "OTP resend is unavailable because backend authentication does not provide an OTP endpoint.",
+              );
             }}
           >
             Resend OTP

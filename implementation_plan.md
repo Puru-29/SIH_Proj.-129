@@ -45,7 +45,7 @@ Currently, [router.py](file:///d:/Downloads/SIH_Proj.%20129/backend/app/api/v1/r
 - `GET /api/v1/stats/dashboard`: Real aggregated dashboard stats (total transactions, success rate %, active mesh nodes, anomaly detection alerts, latency breakdown)
 
 #### [NEW] [documents.py](file:///d:/Downloads/SIH_Proj.%20129/backend/app/api/v1/documents.py)
-- `POST /api/v1/documents/upload-and-verify`: Accepts document upload/base64, invokes the multi-model AI pipeline (EasyOCR + LayoutLMv3 + spaCy + Anomaly detection) and stores results in the DB
+- `POST /api/v1/documents/upload-and-verify`: Accepts multipart PDF/JPG/PNG uploads, validates and extracts document fields, compares certificate details to stored verified source records, detects exact duplicate files, and persists results for required human review. Extraction signals are not fraud or authenticity verdicts.
 
 #### [MODIFY] [router.py](file:///d:/Downloads/SIH_Proj.%20129/backend/app/api/v1/router.py)
 - Mount all routers under `/api/v1`
@@ -90,7 +90,7 @@ Currently, [router.py](file:///d:/Downloads/SIH_Proj.%20129/backend/app/api/v1/r
 - Live header badge displaying backend health, response latency, and active AI engine status (EasyOCR, LayoutLMv3, spaCy, DistilBERT, XGBoost, One-Class SVM).
 
 #### [NEW] [AIDocumentVerifier.tsx](file:///d:/Downloads/SIH_Proj.%20129/frontend/govflow-connect-main/govflow-connect-main/src/components/govflow/ai-document-verifier.tsx)
-- Interactive AI Document Verification widget in the UI allowing users to test document verification, OCR text extraction, entity recognition, and fraud risk scoring against the live backend!
+- Document Verification portal backed by persisted upload and verification results, with original-file access and role-scoped human review actions.
 
 ---
 

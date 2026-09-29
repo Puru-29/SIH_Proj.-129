@@ -7,181 +7,153 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { api, type DashboardStats, type MeshApplication, type MeshConsent } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/http";
+import { connectorService } from "@/services/connectorService";
+import { governmentDataService } from "@/services/governmentDataService";
+import { workflowService } from "@/services/workflowService";
 import {
-  APPLICATIONS,
-  CONSENTS,
-  EXCEPTIONS,
-  INTEGRATIONS,
-  LOCATIONS,
-  MAPPING_PRESETS,
-  NOTIFICATIONS,
-  WORKFLOWS,
-  SERVICES,
-  getLocation,
-  type Consent,
-  type ExceptionItem,
   type Application,
-  type Integration,
-  type Workflow,
+  type Consent,
+  type Department,
+  type ExceptionItem,
   type FieldMap,
+  type Integration,
   type Notification,
+  type PlatformUser,
   type Role,
+  type Service,
+  type Workflow,
 } from "./data";
-import {
-  api,
-  type DashboardStats,
-  type MeshApplication,
-  type MeshConsent,
-  type MeshNodePlatform,
-} from "@/lib/api";
 
 export type SessionUser = {
+  id?: number;
   name: string;
   email: string;
   mobile: string;
   role: Role;
+  backendRole?: string;
   department: string;
   avatarInitial: string;
 };
 
-export type ConsentHistoryEntry = {
-  status: Consent["status"];
-  timestamp: string;
-  actor: string;
-};
-
 type Store = {
   user: SessionUser | null;
-  signIn: (u: SessionUser) => void;
+  signIn: (user: SessionUser) => void;
   signOut: () => Promise<void>;
-  locationId: string;
-  setLocationId: (id: string) => void;
-  location: ReturnType<typeof getLocation>;
   notifications: Notification[];
-  markRead: (id: string) => void;
-  markAllRead: () => void;
-  pushNotification: (n: Omit<Notification, "id" | "time" | "read">) => void;
+  markRead: (id: string) => Promise<void>;
+  markAllRead: () => Promise<void>;
   exceptions: ExceptionItem[];
-  updateException: (id: string, patch: Partial<ExceptionItem>) => void;
+  updateException: (id: string, patch: Partial<ExceptionItem>) => Promise<void>;
   consents: Consent[];
-  updateConsent: (id: string, status: Consent["status"]) => void;
-  consentHistory: Record<string, ConsentHistoryEntry[]>;
+  updateConsent: (id: string, status: Consent["status"]) => Promise<void>;
   applications: Application[];
-  updateApplication: (id: string, patch: Partial<Application>) => void;
+  updateApplication: (id: string, patch: Partial<Application>) => Promise<void>;
   workflows: Workflow[];
   createWorkflow: (workflow: Workflow) => void;
-  updateWorkflow: (id: string, patch: Partial<Workflow>) => void;
+  updateWorkflow: (id: string, patch: Partial<Workflow>) => Promise<void>;
   integrations: Integration[];
-  updateIntegration: (id: string, patch: Partial<Integration>) => void;
+  updateIntegration: (id: string, patch: Partial<Integration>) => Promise<void>;
   mappings: Record<string, FieldMap[]>;
-  saveMapping: (integrationId: string, mapping: FieldMap[]) => void;
-  lastUpdated: Date;
+  saveMapping: (integrationId: string, mapping: FieldMap[]) => Promise<void>;
+  services: Service[];
+  departments: Department[];
+  users: PlatformUser[];
+  lastUpdated: Date | null;
   ready: boolean;
   isLive: boolean;
   liveStats: DashboardStats | null;
+  loadError: string;
   refreshLiveData: () => Promise<void>;
 };
 
 const Ctx = createContext<Store | null>(null);
 
-const KEY = "govflow.state.v2"; // v2 to bypass stale mock data
+export function displayBackendRole(role: string): Role {
+  if (role === "citizen") return "Citizen";
+  if (role === "admin" || role === "system_admin") return "Admin";
+  if (role === "officer" || role === "department_officer") return "Department Officer";
+  if (role === "developer" || role === "interoperability_admin") return "Developer";
+  if (role === "auditor") return "Auditor";
+  return "Operator";
+}
 
-const nowIso = () =>
-  new Date().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
+const displayStatus = (status: string) => status.replaceAll("_", " ").toLowerCase();
 
-function mapBackendApplication(app: MeshApplication, index: number): Application {
-  const serviceCode = (app.service_code || "").toUpperCase();
-  let serviceId = "scholarship";
-  if (serviceCode.includes("AGRI") || serviceCode.includes("FRM")) serviceId = "farmer-assistance";
-  else if (serviceCode.includes("RTO") || serviceCode.includes("DL")) serviceId = "driving-license";
-  else if (serviceCode.includes("RC") || serviceCode.includes("PDS") || serviceCode.includes("SUB")) serviceId = "subsidy";
-  else if (serviceCode.includes("INC") || serviceCode.includes("REV")) serviceId = "income-certificate";
-
-  const loc = LOCATIONS[index % LOCATIONS.length]!;
-
-  let status: Application["status"] = "In Progress";
-  let stageId = "verification";
-  if (app.status === "approved") {
-    status = "Completed";
-    stageId = "completed";
-  } else if (app.status === "rejected") {
-    status = "Failed";
-    stageId = "exception";
-  } else if (app.status === "submitted") {
-    status = "Pending";
-    stageId = "eligibility";
-  } else {
-    status = "In Progress";
-    stageId = "education";
-  }
-
-  const createdAt = app.created_at || (app as MeshApplication & { createdAt?: string }).createdAt;
-  const dateStr = createdAt
-    ? new Date(createdAt).toLocaleDateString("en-IN", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      })
-    : `${(index % 27) + 1} Sep 2026`;
-
+function mapApplication(
+  app: MeshApplication,
+  consents: MeshConsent[],
+  exceptions: Awaited<ReturnType<typeof api.getExceptions>>,
+): Application {
+  const step = app.current_workflow_step;
+  const status: Application["status"] =
+    app.status === "approved"
+      ? "Completed"
+      : app.status === "rejected"
+        ? "Failed"
+        : app.status === "submitted"
+          ? "Pending"
+          : "In Progress";
   return {
-    id: app.reference_id || `APP-${app.id}`,
-    citizen: app.citizen_name || `Citizen #${app.citizen_id}`,
-    citizenId: `CIT-${900100 + app.citizen_id}`,
-    serviceId,
-    locationId: loc.id,
+    id: app.reference_id,
+    backendId: app.id,
+    citizen: app.citizen_name ?? "",
+    citizenId: String(app.citizen_id),
+    serviceId: String(app.service_id),
     status,
-    stageId,
-    submitted: dateStr,
-    consentIds: [`CA-2026-${70000 + app.id}`],
-    exceptionIds: status === "Failed" ? [`EXC-${4400 + app.id}`] : [],
+    stageId: step?.step_id ?? "",
+    submitted: app.created_at,
+    consentIds: consents
+      .filter((consent) => consent.application_id === app.id)
+      .map((consent) => String(consent.id)),
+    exceptionIds: exceptions
+      .filter((exception) => exception.applicationId === String(app.id))
+      .map((exception) => String(exception.id)),
   };
 }
 
-function mapBackendPlatform(p: MeshNodePlatform, index: number): Integration {
+function mapIntegration(
+  item: Awaited<ReturnType<typeof api.getConnectedSystems>>[number],
+): Integration {
+  const latency = item.responseTimeMs;
   return {
-    id: p.slug || `int-${p.id}`,
-    name: p.name,
-    protocol: "REST / JSON",
-    owner: p.name.split(" ")[0] || "Government of India",
-    health: p.status === "active" ? "Healthy" : p.status === "degraded" ? "Degraded" : "Down",
-    successRate: p.status === "active" ? 99.4 : 88.5,
-    latencyMs: 24 + ((index * 17) % 160),
-    uptime: 99.9,
-    failures24h: p.status === "active" ? 0 : 3,
-    auth: "OAuth 2.0 + HMAC",
-    baseUrl: p.base_url || "https://api.govflow.in/v1",
-    endpoints: [
-      { method: "GET", path: "/status", desc: "Live node health and availability" },
-      { method: "POST", path: "/verify", desc: "Inter-departmental verification exchange" },
-    ],
-    sampleRequest: `{\n  "mesh_node": "${p.slug}",\n  "api_version": "${p.api_version}"\n}`,
-    sampleResponse: `{\n  "status": "${p.status.toUpperCase()}",\n  "node": "${p.name}",\n  "timestamp": "${new Date().toISOString()}"\n}`,
-    schema: ["citizen_id", "timestamp", "signature", "payload"],
+    id: String(item.id),
+    name: item.name,
+    protocol: item.integrationType,
+    owner: item.department ?? "",
+    health:
+      item.status === "healthy"
+        ? "Healthy"
+        : item.status === "degraded"
+          ? "Degraded"
+          : item.status === "offline"
+            ? "Down"
+            : "Unknown",
+    ...(latency !== null && latency !== undefined ? { latencyMs: latency } : {}),
+    failures24h: item.failureCount,
   };
 }
 
-function mapBackendConsent(c: MeshConsent): Consent {
+function mapConsent(consent: MeshConsent): Consent {
+  const status: Consent["status"] =
+    consent.status === "granted" || consent.status === "active"
+      ? "Active"
+      : consent.status === "revoked"
+        ? "Revoked"
+        : consent.status === "expired"
+          ? "Expired"
+          : "Pending";
   return {
-    id: `CA-2026-${c.id}`,
-    applicationId: "SCH-10291",
-    requestedBy: c.source_platform_name || "UIDAI / SAMARTH",
-    dataRequested: c.purpose,
-    purpose: c.purpose,
-    recipient: c.target_platform_name || "GovFlow Inter-Governmental Mesh",
-    status: c.status === "granted" ? "Active" : c.status === "revoked" ? "Revoked" : "Expired",
-    grantedOn: new Date(c.created_at).toLocaleDateString("en-IN", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    }),
-    expiry: c.expires_at
-      ? new Date(c.expires_at).toLocaleDateString("en-IN", {
-          day: "numeric",
-          month: "short",
-          year: "numeric",
-        })
-      : "31 Dec 2026",
+    id: String(consent.id),
+    applicationId: consent.application_id ? String(consent.application_id) : "",
+    requestedBy: consent.source_platform_name ?? "",
+    dataRequested: consent.requested_data,
+    purpose: consent.purpose,
+    recipient: consent.target_platform_name ?? "",
+    status,
+    ...(consent.granted_at ? { grantedOn: consent.granted_at } : {}),
+    ...(consent.expires_at ? { expiry: consent.expires_at } : {}),
   };
 }
 
@@ -189,157 +161,251 @@ export function GovFlowProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [isLive, setIsLive] = useState(false);
   const [liveStats, setLiveStats] = useState<DashboardStats | null>(null);
-  const [rawBackendApps, setRawBackendApps] = useState<MeshApplication[]>([]);
-  const [rawBackendConsents, setRawBackendConsents] = useState<MeshConsent[]>([]);
-
   const [user, setUser] = useState<SessionUser | null>(null);
-  const [locationId, setLocationId] = useState<string>(LOCATIONS[0]!.id);
-  const [notifications, setNotifications] = useState<Notification[]>(NOTIFICATIONS);
-  const [exceptions, setExceptions] = useState<ExceptionItem[]>(EXCEPTIONS);
-  const [consents, setConsents] = useState<Consent[]>(CONSENTS);
-  const [consentHistory, setConsentHistory] = useState<Record<string, ConsentHistoryEntry[]>>({});
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [exceptions, setExceptions] = useState<ExceptionItem[]>([]);
+  const [consents, setConsents] = useState<Consent[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
-  const [workflows, setWorkflows] = useState<Workflow[]>(WORKFLOWS);
-  const [integrations, setIntegrations] = useState<Integration[]>(INTEGRATIONS);
-  const [mappings, setMappings] = useState(MAPPING_PRESETS);
-  const [lastUpdated, setLastUpdated] = useState(new Date());
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
+  const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [mappings, setMappings] = useState<Record<string, FieldMap[]>>({});
+  const [services, setServices] = useState<Service[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [users, setUsers] = useState<PlatformUser[]>([]);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [loadError, setLoadError] = useState("");
 
-  // Function to fetch and synchronize live data from FastAPI backend
   const refreshLiveData = useCallback(async () => {
-    try {
-      const [statsRes, appsRes, platformsRes, consentsRes] = await Promise.allSettled([
-        api.getStats(),
-        api.getApplications(),
-        api.getPlatforms(),
-        api.getConsents(),
-      ]);
-
-      let loadedSomething = false;
-
-      if (statsRes.status === "fulfilled" && statsRes.value) {
-        setLiveStats(statsRes.value);
-        loadedSomething = true;
-      }
-
-      if (appsRes.status === "fulfilled" && appsRes.value && appsRes.value.length > 0) {
-        setRawBackendApps(appsRes.value);
-        const mappedApps = appsRes.value.map(mapBackendApplication);
-        setApplications(mappedApps);
-        loadedSomething = true;
-      }
-
-      if (platformsRes.status === "fulfilled" && platformsRes.value && platformsRes.value.length > 0) {
-        const mappedPlatforms = platformsRes.value.map(mapBackendPlatform);
-        setIntegrations(mappedPlatforms);
-        loadedSomething = true;
-      }
-
-      if (consentsRes.status === "fulfilled" && consentsRes.value && consentsRes.value.length > 0) {
-        setRawBackendConsents(consentsRes.value);
-        const mappedConsents = consentsRes.value.map(mapBackendConsent);
-        setConsents(mappedConsents);
-        setConsentHistory(
-          Object.fromEntries(
-            mappedConsents.map((consent) => [
-              consent.id,
-              [{ status: consent.status, timestamp: consent.grantedOn, actor: consent.requestedBy }],
-            ]),
-          ),
-        );
-        loadedSomething = true;
-      }
-
-      if (loadedSomething) {
-        setIsLive(true);
-        setLastUpdated(new Date());
-      }
-    } catch (err) {
-      console.warn("Could not synchronize live data with backend:", err);
-    }
-  }, []);
-
-  // Initial load
-  useEffect(() => {
-    // Clear legacy mock localStorage cache
-    if (typeof window !== "undefined") {
-      window.localStorage.removeItem("govflow.state.v1");
-    }
-
-    api.restoreSession().then((profile) => {
-      if (profile) {
-        setUser({
-          name: profile.full_name,
-          email: profile.email,
-          mobile: profile.phone || "",
-          role: profile.role === "citizen" ? "Citizen" : profile.role === "admin" ? "Admin" : profile.role === "officer" ? "Department Officer" : profile.role === "developer" ? "Developer" : profile.role === "auditor" ? "Auditor" : "Operator",
-          department: profile.department || "GovFlow Platform",
-          avatarInitial: profile.full_name[0]?.toUpperCase() || "G",
-        });
-      }
-    }).finally(() => refreshLiveData().finally(() => setReady(true)));
-
-    // Poll live data every 15 seconds
-    const interval = setInterval(refreshLiveData, 15000);
-    return () => clearInterval(interval);
-  }, [refreshLiveData]);
-
-  const pushNotification = useCallback((n: Omit<Notification, "id" | "time" | "read">) => {
-    setNotifications((prev) =>
-      [{ ...n, id: `n-${Date.now()}`, time: "just now", read: false }, ...prev].slice(0, 40),
+    const results = await Promise.allSettled([
+      api.getStats(),
+      api.getApplications(),
+      api.getConsents(),
+      api.getNotifications(),
+      governmentDataService.getExceptions(),
+      workflowService.getWorkflowDefinitions(),
+      connectorService.getConnectors(),
+      governmentDataService.getMappings(),
+      api.getServices(),
+      governmentDataService.getDepartments(),
+      api.getUsers(),
+    ]);
+    const rejected = results.filter((result) => result.status === "rejected");
+    setLoadError(
+      rejected.length ? apiErrorMessage((rejected[0] as PromiseRejectedResult).reason) : "",
     );
+
+    const [
+      stats,
+      rawApplications,
+      rawConsents,
+      rawNotifications,
+      rawExceptions,
+      rawWorkflows,
+      rawIntegrations,
+      rawMappings,
+      rawServices,
+      rawDepartments,
+      rawUsers,
+    ] = results;
+    const resolved = <T,>(result: PromiseSettledResult<T>): T | undefined =>
+      result.status === "fulfilled" ? result.value : undefined;
+    const consentData = resolved(rawConsents) ?? [];
+    const applicationData = resolved(rawApplications) ?? [];
+
+    if (stats.status === "fulfilled") setLiveStats(stats.value);
+    if (rawConsents.status === "fulfilled") {
+      const mapped = consentData.map(mapConsent);
+      setConsents(mapped);
+    }
+    if (rawApplications.status === "fulfilled") {
+      setApplications(
+        applicationData.map((app) =>
+          mapApplication(app, consentData, resolved(rawExceptions) ?? []),
+        ),
+      );
+    }
+    if (rawNotifications.status === "fulfilled") {
+      setNotifications(
+        rawNotifications.value.map((item) => ({
+          id: String(item.id),
+          title: item.title,
+          body: item.message,
+          kind: item.event_type,
+          time: item.created_at,
+          read: item.read,
+          eventType: item.event_type,
+          applicationId: item.application_id,
+          applicationReference: item.application_reference,
+          transactionId: item.transaction_id,
+        })),
+      );
+    }
+    if (rawExceptions.status === "fulfilled") {
+      setExceptions(
+        rawExceptions.value.map((item) => ({
+          id: String(item.id),
+          applicationId: item.applicationId ?? "",
+          stage: item.type ?? item.category,
+          system: item.sourceSystem ?? item.system,
+          code: item.type ?? item.category,
+          message: item.message,
+          severity:
+            item.severity === "critical"
+              ? "Critical"
+              : item.severity === "high"
+                ? "High"
+                : "Medium",
+          detectedAt: item.createdAt,
+          attempts: item.retryCount,
+          status:
+            item.status === "RESOLVED"
+              ? "Recovered"
+              : item.status === "ESCALATED"
+                ? "Escalated"
+                : item.status === "RETRYING"
+                  ? "Retrying"
+                  : item.status === "IGNORED"
+                    ? "Ignored"
+                    : "Open",
+          recovery: "",
+        })),
+      );
+    }
+    if (rawWorkflows.status === "fulfilled") {
+      setWorkflows(
+        rawWorkflows.value.map((item) => ({
+          id: String(item.workflow_id),
+          name: item.name,
+          serviceId: String(item.service_id),
+          version: String(item.version),
+          status: displayStatus(item.status),
+          stages: item.steps.map((step) => ({
+            id: step.step_id,
+            name: step.name,
+            ...(step.department ? { department: step.department } : {}),
+          })),
+        })),
+      );
+    }
+    if (rawIntegrations.status === "fulfilled")
+      setIntegrations(rawIntegrations.value.map(mapIntegration));
+    if (rawMappings.status === "fulfilled") {
+      setMappings(
+        Object.fromEntries(
+          rawMappings.value.map((mapping) => [
+            String(mapping.sourceSystemId),
+            mapping.rules.map((rule, index) => ({
+              id: `${mapping.id}-${index}`,
+              source: rule.sourceField,
+              target: rule.targetField,
+              transform: rule.transformation ?? "",
+              required: rule.required,
+              status: mapping.status,
+            })),
+          ]),
+        ),
+      );
+    }
+    if (rawServices.status === "fulfilled") {
+      const deptNames = new Map(
+        (resolved(rawDepartments) ?? []).map((department) => [department.id, department.name]),
+      );
+      setServices(
+        rawServices.value.map((item) => ({
+          id: String(item.id),
+          name: item.name,
+          code: item.code,
+          department: deptNames.get(item.department_id) ?? "",
+          summary: item.description ?? "",
+          active: item.is_active,
+        })),
+      );
+    }
+    if (rawDepartments.status === "fulfilled") {
+      setDepartments(
+        rawDepartments.value.map((item) => ({
+          id: String(item.id),
+          name: item.name,
+          services: (resolved(rawServices) ?? [])
+            .filter((service) => service.department_id === item.id)
+            .map((service) => String(service.id)),
+        })),
+      );
+    }
+    if (rawUsers.status === "fulfilled") {
+      setUsers(
+        rawUsers.value.map((item) => ({
+          id: String(item.id),
+          name: item.full_name,
+          email: item.email,
+          role: displayBackendRole(item.role),
+          department: item.department ?? "",
+          status: item.is_active ? "Active" : "Suspended",
+          lastActive: item.created_at,
+        })),
+      );
+    }
+    setIsLive(!rejected.length);
+    setLastUpdated(new Date());
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    void api
+      .restoreSession()
+      .then((profile) => {
+        if (active && profile) {
+          setUser({
+            id: profile.id,
+            name: profile.full_name,
+            email: profile.email,
+            mobile: profile.phone ?? "",
+            role: displayBackendRole(profile.role),
+            backendRole: profile.role,
+            department: profile.department ?? "",
+            avatarInitial: profile.full_name.charAt(0).toUpperCase(),
+          });
+        }
+      })
+      .finally(() => {
+        if (active) {
+          void refreshLiveData().finally(() => setReady(true));
+        }
+      });
+    const interval = window.setInterval(() => void refreshLiveData(), 30_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [refreshLiveData]);
 
   const updateApplication = useCallback(
     async (id: string, patch: Partial<Application>) => {
-      // Optimistic local state update
-      setApplications((p) => p.map((a) => (a.id === id ? { ...a, ...patch } : a)));
-
-      // Sync with FastAPI SQLite database
-      const targetBackendApp = rawBackendApps.find(
-        (b) => b.reference_id === id || String(b.id) === id,
-      );
-      if (targetBackendApp && patch.status) {
-        let backendStatus = "under_review";
-        if (patch.status === "Completed") backendStatus = "approved";
-        else if (patch.status === "Failed") backendStatus = "rejected";
-        else if (patch.status === "Pending") backendStatus = "submitted";
-
-        try {
-          await api.updateApplicationStatus(
-            targetBackendApp.id,
-            backendStatus,
-            "Updated from GovFlow Operator Console",
-          );
-        } catch (e) {
-          console.warn("Backend status update failed:", e);
-        }
-      }
+      const target = applications.find((application) => application.id === id);
+      if (!target?.backendId || !patch.status)
+        throw new Error("Select an application and supported action.");
+      const status =
+        patch.status === "Completed"
+          ? "approved"
+          : patch.status === "Failed"
+            ? "rejected"
+            : "under_review";
+      await api.updateApplicationStatus(target.backendId, status, "");
+      await refreshLiveData();
     },
-    [rawBackendApps],
+    [applications, refreshLiveData],
   );
 
   const updateConsent = useCallback(
     async (id: string, status: Consent["status"]) => {
-      setConsents((p) => p.map((c) => (c.id === id ? { ...c, status } : c)));
-      setConsentHistory((p) => ({
-        ...p,
-        [id]: [
-          ...(p[id] ?? []),
-          { status, timestamp: nowIso(), actor: user?.name ?? "GovFlow Officer" },
-        ],
-      }));
-
-      // Sync with FastAPI SQLite database
-      const consentIdNum = parseInt(id.replace(/\D/g, ""), 10);
-      if (!isNaN(consentIdNum) && status === "Revoked") {
-        try {
-          await api.revokeConsent(consentIdNum);
-        } catch (e) {
-          console.warn("Backend consent revocation failed:", e);
-        }
-      }
+      const consent = consents.find((item) => item.id === id);
+      if (!consent) throw new Error("Consent request not found.");
+      if (status === "Revoked") await api.revokeConsent(Number(id));
+      else if (status === "Active") await api.approveConsent(Number(id));
+      else if (status === "Expired") await api.rejectConsent(Number(id));
+      await refreshLiveData();
     },
-    [user],
+    [consents, refreshLiveData],
   );
 
   const value = useMemo<Store>(
@@ -347,61 +413,96 @@ export function GovFlowProvider({ children }: { children: ReactNode }) {
       user,
       signIn: setUser,
       signOut: async () => {
-        setUser(null);
         await api.logout();
+        setUser(null);
       },
-      locationId,
-      setLocationId: (id) =>
-        setLocationId(LOCATIONS.some((location) => location.id === id) ? id : LOCATIONS[0]!.id),
-      location: getLocation(locationId),
       notifications,
-      markRead: (id) =>
-        setNotifications((p) => p.map((n) => (n.id === id ? { ...n, read: true } : n))),
-      markAllRead: () => setNotifications((p) => p.map((n) => ({ ...n, read: true }))),
-      pushNotification,
+      markRead: async (id) => {
+        const updated = await api.markNotificationRead(Number(id));
+        setNotifications((current) =>
+          current.map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  read: updated.read,
+                  time: updated.created_at,
+                }
+              : item,
+          ),
+        );
+      },
+      markAllRead: async () => {
+        await Promise.all(
+          notifications
+            .filter((item) => !item.read)
+            .map((item) => api.markNotificationRead(Number(item.id))),
+        );
+        await refreshLiveData();
+      },
       exceptions,
-      updateException: (id, patch) =>
-        setExceptions((p) => p.map((e) => (e.id === id ? { ...e, ...patch } : e))),
+      updateException: async (id, patch) => {
+        if (!patch.status) return;
+        await api.updateException(Number(id), {
+          status:
+            patch.status === "Recovered"
+              ? "RESOLVED"
+              : (patch.status.toUpperCase() as
+                  "OPEN" | "RETRYING" | "RESOLVED" | "ESCALATED" | "IGNORED"),
+        });
+        await refreshLiveData();
+      },
       consents,
       updateConsent,
-      consentHistory,
       applications,
       updateApplication,
       workflows,
-      createWorkflow: (workflow) => setWorkflows((p) => [workflow, ...p]),
-      updateWorkflow: (id, patch) =>
-        setWorkflows((p) => p.map((w) => (w.id === id ? { ...w, ...patch } : w))),
+      createWorkflow: () => {
+        throw new Error("Workflow creation requires the workflow service API.");
+      },
+      updateWorkflow: async () => {
+        throw new Error("Workflow changes must be submitted through a configured workflow API.");
+      },
       integrations,
-      updateIntegration: (id, patch) =>
-        setIntegrations((p) => p.map((i) => (i.id === id ? { ...i, ...patch } : i))),
+      updateIntegration: async (id) => {
+        await api.pingPlatform(Number(id));
+        await refreshLiveData();
+      },
       mappings,
-      saveMapping: (integrationId, mapping) =>
-        setMappings((p) => ({ ...p, [integrationId]: mapping })),
+      saveMapping: async () => {
+        throw new Error(
+          "Mapping changes are read-only until a backend save endpoint is available.",
+        );
+      },
+      services,
+      departments,
+      users,
       lastUpdated,
       ready,
       isLive,
       liveStats,
+      loadError,
       refreshLiveData,
     }),
     [
       user,
-      locationId,
       notifications,
       exceptions,
       consents,
-      consentHistory,
+      updateConsent,
       applications,
+      updateApplication,
       workflows,
       integrations,
       mappings,
+      services,
+      departments,
+      users,
       lastUpdated,
-      pushNotification,
       ready,
       isLive,
       liveStats,
+      loadError,
       refreshLiveData,
-      updateApplication,
-      updateConsent,
     ],
   );
 
@@ -409,16 +510,11 @@ export function GovFlowProvider({ children }: { children: ReactNode }) {
 }
 
 export function useGovFlow() {
-  const ctx = useContext(Ctx);
-  if (!ctx) throw new Error("useGovFlow must be used inside GovFlowProvider");
-  return ctx;
+  const context = useContext(Ctx);
+  if (!context) throw new Error("useGovFlow must be used inside GovFlowProvider");
+  return context;
 }
 
-/** Location-aware application list. Shows live applications for current location or all if city matches. */
 export function useScopedApplications() {
-  const { locationId, applications } = useGovFlow();
-  return useMemo(() => {
-    const matched = applications.filter((a) => a.locationId === locationId);
-    return matched.length > 0 ? matched : applications;
-  }, [applications, locationId]);
+  return useGovFlow().applications;
 }

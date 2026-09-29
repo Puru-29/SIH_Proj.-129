@@ -26,7 +26,9 @@ export function PageHeader({
           {title}
         </h1>
         {subtitle ? (
-          <p className="mt-1 max-w-2xl text-[14px] font-medium leading-6 text-[#465f6f]">{subtitle}</p>
+          <p className="mt-1 max-w-2xl text-[14px] font-medium leading-6 text-[#465f6f]">
+            {subtitle}
+          </p>
         ) : null}
       </div>
       {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
@@ -111,6 +113,7 @@ const healthTone: Record<Health, string> = {
   Healthy: "bg-success/12 text-success border-success/25",
   Degraded: "bg-warning/15 text-warning border-warning/30",
   Down: "bg-danger/12 text-danger border-danger/25",
+  Unknown: "bg-muted text-muted-foreground border-border",
 };
 
 export function HealthPill({ health }: { health: Health }) {
@@ -175,7 +178,9 @@ export function KeyValue({ items }: { items: [string, ReactNode][] }) {
           <dt className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
             {k}
           </dt>
-          <dd className="mt-0.5 text-[14px] font-medium leading-6 text-foreground wrap-break-word">{v}</dd>
+          <dd className="mt-0.5 text-[14px] font-medium leading-6 text-foreground wrap-break-word">
+            {v}
+          </dd>
         </div>
       ))}
     </dl>

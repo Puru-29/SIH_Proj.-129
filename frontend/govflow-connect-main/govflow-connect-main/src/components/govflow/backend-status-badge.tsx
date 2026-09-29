@@ -1,159 +1,97 @@
-import React, { useEffect, useState } from "react";
-import { Activity, CheckCircle2, Cpu, Database, RefreshCw, Server, WifiOff } from "lucide-react";
-import { api, type MLSystemStatus } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { Activity, RefreshCw } from "lucide-react";
+import type { SystemHealth } from "@/lib/api";
+import { connectorService } from "@/services/connectorService";
 
 export function BackendStatusBadge() {
-  const [online, setOnline] = useState<boolean | null>(null);
-  const [latency, setLatency] = useState<number | null>(null);
-  const [mlStatus, setMlStatus] = useState<MLSystemStatus | null>(null);
-  const [checking, setChecking] = useState<boolean>(false);
-  const [showDetails, setShowDetails] = useState<boolean>(false);
+  const [health, setHealth] = useState<SystemHealth | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
 
-  const checkStatus = async () => {
+  const checkStatus = useCallback(async () => {
     setChecking(true);
-    const start = performance.now();
     try {
-      const health = await api.getHealth();
-      const elapsed = Math.round(performance.now() - start);
-      if (health && health.status === "ok") {
-        setOnline(true);
-        setLatency(elapsed);
-        const ml = await api.getMLStatus();
-        if (ml) setMlStatus(ml);
-      } else {
-        setOnline(false);
-      }
+      setHealth(await connectorService.runConnectorHealthChecks());
     } catch {
-      setOnline(false);
+      setHealth(null);
     } finally {
       setChecking(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    checkStatus();
-    const interval = setInterval(checkStatus, 30000); // Poll every 30s
-    return () => clearInterval(interval);
-  }, []);
+    void checkStatus();
+    const interval = window.setInterval(() => void checkStatus(), 30_000);
+    return () => window.clearInterval(interval);
+  }, [checkStatus]);
+
+  const healthyCount =
+    health?.integrations.filter((integration) => integration.status === "healthy").length ?? 0;
+  const statusLabel = health
+    ? `${healthyCount}/${health.integrations.length} connectors healthy`
+    : checking
+      ? "Checking connector health"
+      : "Connector health unavailable";
 
   return (
     <div className="relative inline-block text-xs">
       <button
-        onClick={() => setShowDetails(!showDetails)}
-        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all font-medium ${
-          online === true
-            ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/30 hover:bg-emerald-500/20 dark:text-emerald-400"
-            : online === false
-            ? "bg-amber-500/10 text-amber-600 border-amber-500/30 hover:bg-amber-500/20 dark:text-amber-400"
-            : "bg-muted text-muted-foreground border-border"
+        onClick={() => setShowDetails((visible) => !visible)}
+        className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium transition-all ${
+          health?.status === "healthy"
+            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400"
+            : "border-border bg-muted text-muted-foreground"
         }`}
-        title="Click to view backend connection & AI/ML engine statuses"
+        title="Live connector health-check results"
       >
         <span
           className={`h-2 w-2 rounded-full ${
-            online === true
-              ? "bg-emerald-500 animate-pulse"
-              : online === false
-              ? "bg-amber-500"
-              : "bg-muted-foreground animate-ping"
+            health?.status === "healthy" ? "animate-pulse bg-emerald-500" : "bg-muted-foreground"
           }`}
         />
-        <span>
-          {online === true
-            ? `Backend Online ${latency ? `(${latency}ms)` : ""}`
-            : online === false
-            ? "Backend Offline (Port 8000)"
-            : "Checking Backend..."}
-        </span>
+        <span>{statusLabel}</span>
       </button>
 
-      {showDetails && (
-        <div className="absolute right-0 mt-2 w-80 rounded-xl border border-border bg-card p-4 shadow-xl z-50 text-card-foreground animate-in fade-in slide-in-from-top-2">
-          <div className="flex items-center justify-between pb-2 border-b border-border">
+      {showDetails ? (
+        <div className="absolute right-0 z-50 mt-2 w-80 rounded-xl border border-border bg-card p-4 text-card-foreground shadow-xl">
+          <div className="flex items-center justify-between border-b border-border pb-2">
             <div className="flex items-center gap-2 font-semibold">
-              <Server className="h-4 w-4 text-primary" />
-              <span>Inter-Gov Mesh Backend</span>
+              <Activity className="size-4 text-primary" />
+              <span>Connector health</span>
             </div>
             <button
-              onClick={checkStatus}
+              onClick={() => void checkStatus()}
               disabled={checking}
-              className="p-1 rounded hover:bg-muted text-muted-foreground transition-colors"
-              title="Refresh connection status"
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted"
+              title="Refresh connector health"
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${checking ? "animate-spin" : ""}`} />
+              <RefreshCw className={`size-3.5 ${checking ? "animate-spin" : ""}`} />
             </button>
           </div>
-
-          <div className="py-2.5 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground flex items-center gap-1.5">
-                <Activity className="h-3.5 w-3.5" /> API Server:
-              </span>
-              <span className="font-mono font-medium">
-                {online ? "http://127.0.0.1:8000" : "Unreachable"}
-              </span>
+          {health ? (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-muted-foreground">
+                {health.status.toUpperCase()} · {healthyCount}/{health.integrations.length} healthy
+              </p>
+              {health.integrations.map((integration) => (
+                <div
+                  key={integration.id}
+                  className="flex items-center justify-between gap-2 text-xs"
+                >
+                  <span className="truncate">{integration.name}</span>
+                  <span className="shrink-0 text-muted-foreground">
+                    {integration.status} · {integration.response_time} ms
+                  </span>
+                </div>
+              ))}
             </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground flex items-center gap-1.5">
-                <Database className="h-3.5 w-3.5" /> SQLite Mesh DB:
-              </span>
-              <span className="font-medium text-emerald-600 dark:text-emerald-400">
-                Connected (sih26129.db)
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground flex items-center gap-1.5">
-                <Cpu className="h-3.5 w-3.5" /> AI/ML Engines:
-              </span>
-              <span className="font-medium">
-                {mlStatus ? `${mlStatus.ready_count ?? mlStatus.ready_engines ?? 6} / ${mlStatus.total_engines} Active` : "6 Engines"}
-              </span>
-
-            </div>
-          </div>
-
-          {mlStatus?.engines && (
-            <div className="pt-2 border-t border-border">
-              <div className="text-[11px] font-semibold text-muted-foreground mb-1.5 uppercase tracking-wider">
-                Integrated Models
-              </div>
-              <div className="space-y-1 max-h-36 overflow-y-auto pr-1">
-                {Object.entries(mlStatus.engines).map(([key, item]) => (
-                  <div key={key} className="flex items-center justify-between text-[11px]">
-                    <span className="truncate max-w-[170px]" title={item.name}>
-                      {item.name.split(" ")[0]}
-                    </span>
-                    <span
-                      className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] ${
-                        item.ready
-                          ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                          : "bg-muted text-muted-foreground"
-                      }`}
-                    >
-                      <CheckCircle2 className="h-2.5 w-2.5" />
-                      Ready
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
+          ) : (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Connector health could not be retrieved. Try again later.
+            </p>
           )}
-
-          <div className="mt-3 pt-2 border-t border-border text-[11px] text-muted-foreground text-center">
-            {online ? (
-              <span className="text-emerald-600 dark:text-emerald-400 font-medium">
-                Full two-way REST API communication active
-              </span>
-            ) : (
-              <span className="text-amber-600 dark:text-amber-400">
-                Run <code>start_backend.bat</code> to launch FastAPI
-              </span>
-            )}
-          </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

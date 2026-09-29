@@ -8,6 +8,8 @@ from app.api.deps import require_role
 from app.models.department import Department
 from app.models.user import User
 from app.schemas.department import DepartmentCreate, DepartmentRead
+from app.services.audit_service import record_audit
+from app.api.deps import get_user_role_key
 
 router = APIRouter(prefix="/departments", tags=["Departments"])
 
@@ -59,6 +61,18 @@ def create_department(
         state=payload.state,
     )
     db.add(dept)
+    db.flush()
+    record_audit(
+        db,
+        action="DEPARTMENT_CREATED",
+        resource_type="department",
+        resource_id=dept.id,
+        actor_id=_admin.id,
+        actor_role=get_user_role_key(_admin),
+        role_id=_admin.role_id,
+        department_id=dept.id,
+        metadata={"code": dept.code},
+    )
     db.commit()
     db.refresh(dept)
     return dept

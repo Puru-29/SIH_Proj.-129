@@ -5,6 +5,7 @@ from app.models.service import Service
 from app.models.application import ServiceApplication
 from app.models.consent import DataShareConsent
 from app.models.document import Document
+from app.models.document_verification_result import DocumentVerificationResult
 from app.models.audit import AuditLog
 from app.models.auth_session import AuthSession
 from app.models.interoperability_exception import InteroperabilityException
@@ -15,6 +16,7 @@ from app.models.government_record import GovernmentRecord, GovernmentRecordValue
 from app.models.transaction_event import TransactionEvent
 from app.models.data_mapping import DataMapping, DataMappingRule
 from app.models.notification import Notification
+from app.models.integration_health_check import IntegrationHealthCheck
 from app.models.workflow import Workflow, WorkflowStep
 
 __all__ = [
@@ -25,6 +27,7 @@ __all__ = [
     "ServiceApplication",
     "DataShareConsent",
     "Document",
+    "DocumentVerificationResult",
     "AuditLog",
     "AuthSession",
     "InteroperabilityException",
@@ -37,6 +40,7 @@ __all__ = [
     "DataMapping",
     "DataMappingRule",
     "Notification",
+    "IntegrationHealthCheck",
     "Workflow",
     "WorkflowStep",
 ]

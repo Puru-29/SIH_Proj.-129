@@ -29,3 +29,9 @@ class Document(PublicUUIDMixin, TimestampMixin, Base):
 
     owner = relationship("User", back_populates="documents")
     application = relationship("ServiceApplication", back_populates="documents")
+    verification_result = relationship(
+        "DocumentVerificationResult",
+        back_populates="document",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )

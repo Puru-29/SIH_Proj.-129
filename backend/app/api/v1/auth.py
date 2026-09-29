@@ -62,6 +62,15 @@ class ManagedUserCreate(UserCreate):
     department_id: int | None = None
 
 
+class StaffAccountRequest(UserCreate):
+    role: Literal["department_officer", "interoperability_admin"]
+    department_id: int | None = None
+
+
+class StaffAccountRequestResponse(BaseModel):
+    message: str
+
+
 class ManagedUserUpdate(BaseModel):
     role: Literal[
         "citizen",
@@ -262,6 +271,51 @@ def _start_session(
     )
     _set_refresh_cookie(response, refresh_token)
     return _token_response(user, access_token)
+
+
+@router.post(
+    "/staff-requests",
+    response_model=StaffAccountRequestResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def request_staff_account(
+    payload: StaffAccountRequest,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+):
+    _validate_browser_origin(request)
+    department = _check_department(db, payload.role, payload.department_id)
+    message = "Your staff account request was received. A system administrator must approve it."
+
+    if db.query(User).filter(User.email == payload.email).first():
+        return {"message": message}
+    if payload.phone and db.query(User).filter(User.phone == payload.phone).first():
+        return {"message": message}
+
+    user = User(
+        full_name=payload.full_name,
+        email=payload.email,
+        phone=payload.phone,
+        role=_legacy_role(payload.role),
+        role_id=_role_record(db, payload.role).id,
+        department=department.name if department else None,
+        department_id=department.id if department else None,
+        hashed_password=hash_password(payload.password),
+        is_active=False,
+        staff_request_pending=True,
+    )
+    db.add(user)
+    db.flush()
+    record_audit(
+        db,
+        action="STAFF_ACCOUNT_REQUESTED",
+        resource_type="user",
+        resource_id=user.id,
+        result="pending",
+        metadata={"role": payload.role, "department_id": user.department_id},
+    )
+    db.commit()
+    return {"message": message}
 
 
 @router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
@@ -600,6 +654,8 @@ def update_managed_user(
     user.department = department.name if department else None
     if payload.is_active is not None:
         user.is_active = payload.is_active
+        if payload.is_active:
+            user.staff_request_pending = False
         if not user.is_active:
             db.query(AuthSession).filter(
                 AuthSession.user_id == user.id,

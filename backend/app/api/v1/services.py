@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.api.deps import get_user_role_key, require_role
+from app.models.department import Department
+from app.models.platform import DigitalPlatform
 from app.models.service import Service
 from app.models.user import User
 from app.schemas.service import ServiceCreate, ServiceRead
@@ -53,6 +55,74 @@ def get_service_form_schema(service_id: int, db: Annotated[Session, Depends(get_
     if definition is not None:
         config["workflow"] = [step.name for step in definition.steps]
     return config
+
+
+@router.get("/{service_id}/application-sources")
+def get_service_application_sources(
+    service_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    _citizen: Annotated[User, Depends(require_role("citizen"))],
+):
+    """Return only platform IDs needed by this service's citizen data requests."""
+    service = (
+        db.query(Service)
+        .filter(Service.id == service_id, Service.is_active.is_(True))
+        .first()
+    )
+    if service is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
+
+    definition = workflow_engine.ensure_definition(db, service)
+    if definition is None:
+        return []
+
+    departments = [
+        (
+            department,
+            "".join(
+                character
+                for character in department.name.casefold()
+                if character.isalnum()
+            ),
+        )
+        for department in db.query(Department).all()
+    ]
+    sources: list[dict[str, int | str]] = []
+    seen_departments: set[int] = set()
+    for step in definition.steps:
+        if step.step_type != "DATA_REQUEST" or not step.department:
+            continue
+        step_department = "".join(
+            character for character in step.department.casefold() if character.isalnum()
+        )
+        department = next(
+            (
+                item
+                for item, compact_name in departments
+                if compact_name
+                and (compact_name in step_department or step_department in compact_name)
+            ),
+            None,
+        )
+        if department is None or department.id in seen_departments:
+            continue
+        platform = (
+            db.query(DigitalPlatform)
+            .filter(DigitalPlatform.department_id == department.id)
+            .order_by(DigitalPlatform.name)
+            .first()
+        )
+        if platform is None:
+            continue
+        sources.append(
+            {
+                "department": step.department,
+                "department_id": department.id,
+                "platform_id": platform.id,
+            }
+        )
+        seen_departments.add(department.id)
+    return sources
 
 
 @router.post("", response_model=ServiceRead, status_code=status.HTTP_201_CREATED)

@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum as PyEnum
 import uuid
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Uuid, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Uuid, false, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -35,6 +35,9 @@ class User(PublicUUIDMixin, Base):
     )
     hashed_password: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(default=True)
+    staff_request_pending: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

@@ -69,7 +69,7 @@ class ServiceApplication(PublicUUIDMixin, TimestampMixin, Base):
         return [
             {
                 "key": step.step_key,
-                "label": step.name,
+                "label": self._display_workflow_step_name(step.name),
                 "status": step.status,
                 "detail": step.detail,
                 "attempts": step.attempts,
@@ -87,6 +87,17 @@ class ServiceApplication(PublicUUIDMixin, TimestampMixin, Base):
             for step in self.workflow_run.steps
         ]
 
+    def _display_workflow_step_name(self, name: str) -> str:
+        service_name = self.service.name if self.service else "service"
+        legacy_names = {
+            "Officer review": f"Review {service_name} application",
+            "Approve application": f"Approve {service_name} application",
+            "Reject application": f"Reject {service_name} application",
+            "Notify applicant": f"Notify applicant about {service_name}",
+            "Complete application workflow": f"Complete {service_name} workflow",
+        }
+        return legacy_names.get(name, name)
+
     @property
     def current_workflow_step(self) -> dict | None:
         if self.workflow_run is None:
@@ -103,7 +114,7 @@ class ServiceApplication(PublicUUIDMixin, TimestampMixin, Base):
             return None
         return {
             "step_id": current.step_key,
-            "name": current.name,
+            "name": self._display_workflow_step_name(current.name),
             "department": current.department,
             "type": current.step_type,
             "status": current.status,

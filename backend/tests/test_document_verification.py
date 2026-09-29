@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-import fitz
+import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -24,7 +24,7 @@ from app.models.user import UserRole
 
 
 def _pdf(content: str) -> bytes:
-    document = fitz.open()
+    document = pymupdf.open()
     page = document.new_page()
     page.insert_textbox((50, 50, 550, 750), content)
     return document.tobytes()

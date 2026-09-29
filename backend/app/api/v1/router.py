@@ -13,6 +13,7 @@ from app.api.v1.interoperability import router as interoperability_router
 from app.api.v1.workflows import router as workflows_router
 from app.api.v1.notifications import router as notifications_router
 from app.api.v1.system import router as system_router
+from app.api.v1.grievances import router as grievances_router
 
 api_v1_router = APIRouter()
 api_v1_router.include_router(auth_router)
@@ -29,6 +30,7 @@ api_v1_router.include_router(interoperability_router)
 api_v1_router.include_router(workflows_router)
 api_v1_router.include_router(notifications_router)
 api_v1_router.include_router(system_router)
+api_v1_router.include_router(grievances_router)
 
 
 @api_v1_router.get("/info", tags=["System"])

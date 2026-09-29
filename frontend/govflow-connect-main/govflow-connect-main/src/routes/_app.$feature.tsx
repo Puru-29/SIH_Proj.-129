@@ -1,5 +1,6 @@
 import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { toast } from "sonner";
 import {
   Activity,
   ArrowRight,
@@ -39,6 +40,7 @@ import {
   type MeshApplication,
   type MeshAuditLog,
   type MeshException,
+  type ManagedStaffRole,
 } from "@/lib/api";
 import { auditService } from "@/services/auditService";
 
@@ -134,7 +136,7 @@ const META: Record<
   },
   users: {
     title: "Users",
-    description: "Manage platform access for officers and operators.",
+    description: "Create and review authorized staff accounts.",
     icon: Users,
     eyebrow: "Access Control",
   },
@@ -221,7 +223,6 @@ function FeaturePage({ transactionId }: { transactionId?: string }) {
       <InteroperabilityHub
         query={query}
         setQuery={setQuery}
-        systemsOnly={feature === "integrations"}
         {...(transactionId ? { initialTransactionId: transactionId } : {})}
       />
     );
@@ -823,6 +824,11 @@ function FeaturePage({ transactionId }: { transactionId?: string }) {
             item.recipient,
             <StatusPill key="status" status={item.status} />,
           ])}
+          empty={
+            consents.length
+              ? "No consent records match the selected applications or search."
+              : "No consent records yet. They appear when a citizen authorizes data sharing for an application."
+          }
         />
         <p className="mt-3 text-xs text-muted-foreground">
           Consent decisions are made by the citizen through their portal. Government staff can
@@ -970,6 +976,10 @@ function FeaturePage({ transactionId }: { transactionId?: string }) {
       </FeatureFrame>
     );
 
+  if (feature === "users") {
+    return <UsersPage query={query} setQuery={setQuery} notice={notice} />;
+  }
+
   const content = getRows(
     feature,
     scopedApplications,
@@ -1000,6 +1010,273 @@ function FeaturePage({ transactionId }: { transactionId?: string }) {
         rows={filtered.map((row) => row.cells)}
         empty="No matching records found."
       />
+    </FeatureFrame>
+  );
+}
+
+function UsersPage({
+  query,
+  setQuery,
+  notice,
+}: {
+  query: string;
+  setQuery: (value: string) => void;
+  notice: string;
+}) {
+  const { user, users, departments, ready, loadError, refreshLiveData } = useGovFlow();
+  const [form, setForm] = useState({
+    fullName: "",
+    email: "",
+    phone: "",
+    password: "",
+    role: "department_officer" as ManagedStaffRole,
+    departmentId: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [approvingId, setApprovingId] = useState<number | null>(null);
+  const [error, setError] = useState("");
+
+  if (user?.backendRole !== "system_admin") {
+    return (
+      <FeatureFrame meta={META["users"]!} query={query} setQuery={setQuery} notice={notice}>
+        <Surface>
+          <p role="alert" className="text-sm text-danger">
+            Only system administrators can manage staff accounts.
+          </p>
+        </Surface>
+      </FeatureFrame>
+    );
+  }
+
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError("");
+    if (form.role === "department_officer" && !form.departmentId) {
+      setError("Choose a department for the department officer.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await api.createManagedUser({
+        full_name: form.fullName.trim(),
+        email: form.email.trim(),
+        password: form.password,
+        role: form.role,
+        ...(form.phone ? { phone: form.phone } : {}),
+        ...(form.departmentId ? { department_id: Number(form.departmentId) } : {}),
+      });
+      await refreshLiveData();
+      setForm({
+        fullName: "",
+        email: "",
+        phone: "",
+        password: "",
+        role: "department_officer",
+        departmentId: "",
+      });
+      toast.success("Staff account created.");
+    } catch (createError) {
+      setError(
+        createError instanceof Error ? createError.message : "Staff account could not be created.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const visibleUsers = users.filter((item) =>
+    `${item.name} ${item.email} ${item.role} ${item.department}`
+      .toLowerCase()
+      .includes(query.trim().toLowerCase()),
+  );
+
+  const approveUser = async (id: number) => {
+    setApprovingId(id);
+    setError("");
+    try {
+      await api.updateManagedUser(id, { is_active: true });
+      await refreshLiveData();
+      toast.success("Staff account approved.");
+    } catch (approvalError) {
+      setError(
+        approvalError instanceof Error
+          ? approvalError.message
+          : "Staff account could not be approved.",
+      );
+    } finally {
+      setApprovingId(null);
+    }
+  };
+
+  return (
+    <FeatureFrame meta={META["users"]!} query={query} setQuery={setQuery} notice={notice}>
+      <Surface>
+        <div className="mb-5">
+          <h2 className="text-base font-bold">Create a staff account</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Staff accounts can only be created by a signed-in system administrator.
+          </p>
+        </div>
+        <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <label className="grid gap-1.5 text-sm font-medium">
+            Full name
+            <Input
+              required
+              minLength={3}
+              maxLength={120}
+              value={form.fullName}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, fullName: event.target.value }))
+              }
+              autoComplete="name"
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium">
+            Government email
+            <Input
+              required
+              type="email"
+              value={form.email}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, email: event.target.value }))
+              }
+              autoComplete="email"
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium">
+            Temporary password
+            <Input
+              required
+              type="password"
+              minLength={8}
+              maxLength={16}
+              value={form.password}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, password: event.target.value }))
+              }
+              autoComplete="new-password"
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium">
+            Staff role
+            <select
+              required
+              value={form.role}
+              onChange={(event) => {
+                const value = event.target.value;
+                const role: ManagedStaffRole =
+                  value === "system_admin"
+                    ? "system_admin"
+                    : value === "interoperability_admin"
+                      ? "interoperability_admin"
+                      : "department_officer";
+                setForm((current) => ({ ...current, role, departmentId: "" }));
+              }}
+              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="department_officer">Department officer</option>
+              <option value="interoperability_admin">Interoperability administrator</option>
+              <option value="system_admin">System administrator</option>
+            </select>
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium">
+            Department {form.role === "department_officer" ? "(required)" : "(optional)"}
+            <select
+              required={form.role === "department_officer"}
+              value={form.departmentId}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, departmentId: event.target.value }))
+              }
+              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="">Select a department</option>
+              {departments.map((department) => (
+                <option key={department.id} value={department.id}>
+                  {department.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium">
+            Mobile number (optional)
+            <Input
+              type="tel"
+              inputMode="numeric"
+              pattern="[6-9][0-9]{9}"
+              maxLength={10}
+              value={form.phone}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  phone: event.target.value.replace(/\D/g, "").slice(0, 10),
+                }))
+              }
+              autoComplete="tel"
+            />
+          </label>
+          {error ? (
+            <p role="alert" className="text-sm text-danger sm:col-span-2 xl:col-span-3">
+              {error}
+            </p>
+          ) : null}
+          <div className="sm:col-span-2 xl:col-span-3">
+            <Button
+              type="submit"
+              disabled={
+                saving || !ready || (form.role === "department_officer" && departments.length === 0)
+              }
+            >
+              {saving ? "Creating account…" : "Create staff account"}
+            </Button>
+          </div>
+        </form>
+      </Surface>
+
+      {loadError ? (
+        <Surface>
+          <p role="alert" className="text-sm text-danger">
+            {loadError}
+          </p>
+          <Button className="mt-3" variant="outline" onClick={() => void refreshLiveData()}>
+            <RefreshCw className="mr-2 size-4" /> Retry loading users
+          </Button>
+        </Surface>
+      ) : !ready ? (
+        <Surface>
+          <p className="text-sm text-muted-foreground">Loading staff accounts…</p>
+        </Surface>
+      ) : (
+        <DataTable
+          headers={["Staff member", "Role", "Department", "Status", "Created", "Action"]}
+          rows={visibleUsers.map((item) => [
+            <div key="user">
+              <p className="font-semibold">{item.name}</p>
+              <p className="text-xs text-muted-foreground">{item.email}</p>
+            </div>,
+            item.role,
+            item.department || "—",
+            <StatusPill
+              key="status"
+              status={item.pendingApproval ? "Pending Approval" : item.status}
+            />,
+            item.lastActive ? new Date(item.lastActive).toLocaleDateString() : "—",
+            item.pendingApproval ? (
+              <Button
+                key="approve"
+                size="sm"
+                disabled={approvingId === Number(item.id)}
+                onClick={() => void approveUser(Number(item.id))}
+              >
+                {approvingId === Number(item.id) ? "Approving…" : "Approve"}
+              </Button>
+            ) : (
+              "—"
+            ),
+          ])}
+          empty="No staff accounts or pending requests match this search."
+        />
+      )}
     </FeatureFrame>
   );
 }
@@ -1064,6 +1341,7 @@ function MappingStudio({
   mapping: FieldMap[];
   onSelect: (id: string) => void;
 }) {
+  const selectedIntegration = integrations.find((item) => item.id === integrationId);
   return (
     <>
       <PageHeader
@@ -1103,17 +1381,27 @@ function MappingStudio({
             </tr>
           </thead>
           <tbody>
-            {mapping.map((item) => (
-              <tr key={item.id} className="border-b border-border/60 last:border-0">
-                <td className="px-5 py-3">{item.source}</td>
-                <td className="px-5 py-3">{item.target}</td>
-                <td className="px-5 py-3">{item.transform}</td>
-                <td className="px-5 py-3">{item.required ? "Yes" : "No"}</td>
-                <td className="px-5 py-3">
-                  <StatusPill status={item.status} />
+            {mapping.length ? (
+              mapping.map((item) => (
+                <tr key={item.id} className="border-b border-border/60 last:border-0">
+                  <td className="px-5 py-3">{item.source}</td>
+                  <td className="px-5 py-3">{item.target}</td>
+                  <td className="px-5 py-3">{item.transform}</td>
+                  <td className="px-5 py-3">{item.required ? "Yes" : "No"}</td>
+                  <td className="px-5 py-3">
+                    <StatusPill status={item.status} />
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={5} className="px-5 py-8 text-center text-sm text-muted-foreground">
+                  {selectedIntegration
+                    ? `No persisted mappings for ${selectedIntegration.name} yet. A mapping is saved when data from this system is first exchanged.`
+                    : "Select a connected source system to inspect its mappings."}
                 </td>
               </tr>
-            ))}
+            )}
           </tbody>
         </table>
       </Surface>

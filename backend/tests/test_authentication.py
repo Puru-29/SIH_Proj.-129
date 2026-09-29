@@ -355,3 +355,171 @@ def test_backend_role_and_department_ownership_enforcement(auth_client):
         f"/api/v1/applications/{own_application_id}",
         headers=officer_headers,
     ).status_code == 401
+
+
+def test_staff_account_request_requires_admin_approval(auth_client):
+    client, department_id, *_ = auth_client
+    request_payload = {
+        "full_name": "Pending Officer",
+        "email": "pending.officer@example.com",
+        "password": "OfficerPass123!",
+        "role": "department_officer",
+        "department_id": department_id,
+    }
+
+    requested = client.post("/api/v1/auth/staff-requests", json=request_payload)
+    assert requested.status_code == 202
+    assert "administrator must approve" in requested.json()["message"]
+
+    blocked_login = client.post(
+        "/api/v1/auth/login",
+        json={"email": request_payload["email"], "password": request_payload["password"]},
+    )
+    assert blocked_login.status_code == 403
+
+    admin_login = client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@example.com", "password": "AdminPass123!"},
+    )
+    admin_headers = {
+        "Authorization": f"Bearer {admin_login.json()['access_token']}"
+    }
+    users = client.get("/api/v1/auth/users", headers=admin_headers)
+    assert users.status_code == 200
+    pending_user = next(user for user in users.json() if user["email"] == request_payload["email"])
+    pending_user_id = pending_user["id"]
+    assert pending_user["is_active"] is False
+    assert pending_user["staff_request_pending"] is True
+
+    approved = client.patch(
+        f"/api/v1/auth/users/{pending_user_id}",
+        headers=admin_headers,
+        json={"is_active": True},
+    )
+    assert approved.status_code == 200
+    assert approved.json()["is_active"] is True
+    assert approved.json()["staff_request_pending"] is False
+
+    successful_login = client.post(
+        "/api/v1/auth/login",
+        json={"email": request_payload["email"], "password": request_payload["password"]},
+    )
+    assert successful_login.status_code == 200
+
+
+def test_staff_account_request_cannot_request_admin_role(auth_client):
+    client, *_ = auth_client
+    response = client.post(
+        "/api/v1/auth/staff-requests",
+        json={
+            "full_name": "Unapproved Admin",
+            "email": "request.admin@example.com",
+            "password": "AdminPass123!",
+            "role": "system_admin",
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_citizen_application_sources_do_not_require_platform_admin_access(auth_client):
+    client, department_id, *_ = auth_client
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"email": "citizen@example.com", "password": "CitizenPass123!"},
+    )
+    assert login.status_code == 200
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    services = client.get("/api/v1/services", headers=headers)
+    assert services.status_code == 200
+    service = next(
+        item for item in services.json() if item["name"] == "Revenue Service"
+    )
+    service_id = service["id"]
+
+    admin_platforms = client.get("/api/v1/platforms", headers=headers)
+    assert admin_platforms.status_code == 403
+
+    admin_login = client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@example.com", "password": "AdminPass123!"},
+    )
+    admin_headers = {
+        "Authorization": f"Bearer {admin_login.json()['access_token']}"
+    }
+    platforms = client.get("/api/v1/platforms", headers=admin_headers)
+    assert platforms.status_code == 200
+    revenue_platform = next(
+        item for item in platforms.json() if item["department_id"] == department_id
+    )
+    workflow = client.post(
+        "/api/v1/workflows",
+        headers=admin_headers,
+        json={
+            "service_id": service_id,
+            "name": "Revenue data request",
+            "steps": [
+                {
+                    "step_id": "income_request",
+                    "name": "Verify income",
+                    "department": "Revenue",
+                    "type": "DATA_REQUEST",
+                    "order": 0,
+                    "action": {},
+                }
+            ],
+        },
+    )
+    assert workflow.status_code == 201
+
+    application_sources = client.get(
+        f"/api/v1/services/{service_id}/application-sources",
+        headers=headers,
+    )
+    assert application_sources.status_code == 200
+    assert application_sources.json() == [
+        {
+            "department": "Revenue",
+            "department_id": department_id,
+            "platform_id": revenue_platform["id"],
+        }
+    ]
+
+
+def test_citizens_can_create_and_list_only_their_own_grievances(auth_client):
+    client, *_ = auth_client
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"email": "citizen@example.com", "password": "CitizenPass123!"},
+    )
+    assert login.status_code == 200
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    created = client.post(
+        "/api/v1/grievances",
+        headers=headers,
+        json={
+            "category": "Application delay",
+            "relatedApplication": "APP-REVENUE-1",
+            "department": "Revenue",
+            "description": "Please provide an update on my application.",
+            "priority": "High",
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["id"]
+    assert created.json()["relatedApplication"] == "APP-REVENUE-1"
+    assert created.json()["status"] == "Submitted"
+
+    listed = client.get("/api/v1/grievances", headers=headers)
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()] == [created.json()["id"]]
+
+    unauthenticated = client.get("/api/v1/grievances")
+    assert unauthenticated.status_code == 401
+    invalid = client.post(
+        "/api/v1/grievances",
+        headers=headers,
+        json={"category": " ", "description": " "},
+    )
+    assert invalid.status_code == 422

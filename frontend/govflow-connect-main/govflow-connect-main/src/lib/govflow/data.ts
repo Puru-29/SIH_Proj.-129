@@ -102,6 +102,7 @@ export type PlatformUser = {
   role: Role;
   department: string;
   status: "Active" | "Suspended";
+  pendingApproval?: boolean;
   lastActive: string;
 };
 export type FieldMap = {

@@ -10,6 +10,7 @@ from app.models.department import Department
 from app.models.platform import ConnectedSystem, PlatformStatus
 from app.models.service import Service
 from app.models.user import User, UserRole
+from app.models.workflow import Workflow, WorkflowStep
 from app.schemas.workflow import WorkflowDefinitionCreate
 from app.services.workflow_engine import (
     SCHOLARSHIP_WORKFLOW,
@@ -215,3 +216,37 @@ def test_workflow_run_routes_branch_and_executes_notification():
         }
     finally:
         db.close()
+
+
+def test_legacy_generic_application_steps_are_displayed_with_service_names():
+    service = Service(name="Death Certificate")
+    workflow = Workflow(
+        steps=[
+            WorkflowStep(
+                step_key="officer_review",
+                name="Officer review",
+                sequence=0,
+                step_type="OFFICER_REVIEW",
+                status="in_progress",
+            ),
+            WorkflowStep(
+                step_key="approval",
+                name="Approve application",
+                sequence=1,
+                status="pending",
+            ),
+        ]
+    )
+    application = ServiceApplication(service=service, workflow_run=workflow)
+
+    assert [step["label"] for step in application.workflow] == [
+        "Review Death Certificate application",
+        "Approve Death Certificate application",
+    ]
+    assert application.current_workflow_step == {
+        "step_id": "officer_review",
+        "name": "Review Death Certificate application",
+        "department": None,
+        "type": "OFFICER_REVIEW",
+        "status": "in_progress",
+    }

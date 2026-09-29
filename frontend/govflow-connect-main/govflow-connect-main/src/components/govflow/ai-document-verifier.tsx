@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -49,20 +50,35 @@ export function AIDocumentVerifier() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([api.getApplications(), api.getDocumentVerifications({ limit: 100 })])
-      .then(([applicationRows, verificationRows]) => {
+    Promise.allSettled([api.getApplications(), api.getDocumentVerifications({ limit: 100 })])
+      .then((results) => {
         if (!active) return;
-        setApplications(applicationRows);
-        setVerifications(verificationRows);
-        setApplicationId(applicationRows[0] ? String(applicationRows[0].id) : "");
-      })
-      .catch((loadError: unknown) => {
-        if (!active) return;
-        setError(
-          loadError instanceof Error
-            ? loadError.message
-            : "Document verification data could not be loaded.",
-        );
+        const [applicationsResult, verificationsResult] = results;
+        const errors: string[] = [];
+        if (applicationsResult.status === "fulfilled") {
+          setApplications(applicationsResult.value);
+          setApplicationId((current) =>
+            current && applicationsResult.value.some((app) => String(app.id) === current)
+              ? current
+              : String(applicationsResult.value[0]?.id ?? ""),
+          );
+        } else {
+          errors.push(
+            applicationsResult.reason instanceof Error
+              ? applicationsResult.reason.message
+              : "Applications could not be loaded.",
+          );
+        }
+        if (verificationsResult.status === "fulfilled") {
+          setVerifications(verificationsResult.value);
+        } else {
+          errors.push(
+            verificationsResult.reason instanceof Error
+              ? verificationsResult.reason.message
+              : "Verification results could not be loaded.",
+          );
+        }
+        setError(errors.join(" "));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -236,11 +252,27 @@ export function AIDocumentVerifier() {
           className="flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive"
         >
           <XCircle className="size-4 shrink-0" /> {error}
+          {/authentication required|session has expired|sign in again/i.test(error) ? (
+            <Link
+              to="/login"
+              className="ml-auto shrink-0 rounded-md border border-destructive/30 px-3 py-1.5 font-semibold hover:bg-destructive/10"
+            >
+              Sign in again
+            </Link>
+          ) : null}
         </p>
       ) : null}
-      {!applications.length && !loading ? (
+      {!error && !applications.length && !loading ? (
         <p className="rounded-lg border border-border p-4 text-sm text-muted-foreground">
-          No applications are available to attach a document to.
+          No applications are available. Create or submit an application before attaching a
+          document.
+          <Link
+            to="/$feature"
+            params={{ feature: "applications" }}
+            className="ml-1 font-semibold text-primary hover:underline"
+          >
+            Open applications
+          </Link>
         </p>
       ) : null}
       {loading ? (
@@ -355,7 +387,7 @@ export function AIDocumentVerifier() {
             </article>
           );
         })}
-        {!loading && !verifications.length ? (
+        {!loading && !error && !verifications.length ? (
           <p className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
             No persisted document verification results are available.
           </p>

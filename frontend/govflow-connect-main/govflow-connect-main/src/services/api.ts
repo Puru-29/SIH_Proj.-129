@@ -16,6 +16,7 @@ export type CitizenProfile = {
   verifiedMobile?: boolean;
   verifiedEmail?: boolean;
   aadhaarLast4?: string | null;
+  addressSource?: string;
 };
 
 export type GovernmentService = {
@@ -60,6 +61,7 @@ export type ApplicationItem = {
   backendId: number;
   timeline: Array<{ label: string; date: string | null; completed: boolean; inProgress?: boolean }>;
   expectedNextStep: string;
+  submittedAddress?: string;
   contact?: string;
 };
 

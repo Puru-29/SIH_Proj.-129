@@ -187,7 +187,7 @@ export function GovFlowProvider({ children }: { children: ReactNode }) {
       governmentDataService.getMappings(),
       api.getServices(),
       governmentDataService.getDepartments(),
-      api.getUsers(),
+      user?.backendRole === "system_admin" ? api.getUsers() : Promise.resolve([]),
     ]);
     const rejected = results.filter((result) => result.status === "rejected");
     setLoadError(
@@ -341,13 +341,14 @@ export function GovFlowProvider({ children }: { children: ReactNode }) {
           role: displayBackendRole(item.role),
           department: item.department ?? "",
           status: item.is_active ? "Active" : "Suspended",
+          pendingApproval: item.staff_request_pending ?? false,
           lastActive: item.created_at,
         })),
       );
     }
     setIsLive(!rejected.length);
     setLastUpdated(new Date());
-  }, []);
+  }, [user?.backendRole]);
 
   useEffect(() => {
     let active = true;
@@ -368,16 +369,40 @@ export function GovFlowProvider({ children }: { children: ReactNode }) {
         }
       })
       .finally(() => {
-        if (active) {
-          void refreshLiveData().finally(() => setReady(true));
-        }
+        if (active) setReady(true);
       });
-    const interval = window.setInterval(() => void refreshLiveData(), 30_000);
     return () => {
       active = false;
-      window.clearInterval(interval);
     };
-  }, [refreshLiveData]);
+  }, []);
+
+  useEffect(() => {
+    const handleSessionExpired = () => {
+      setUser(null);
+      setIsLive(false);
+      setLiveStats(null);
+      setNotifications([]);
+      setExceptions([]);
+      setConsents([]);
+      setApplications([]);
+      setWorkflows([]);
+      setIntegrations([]);
+      setMappings({});
+      setServices([]);
+      setDepartments([]);
+      setUsers([]);
+    };
+    window.addEventListener("govflow:session-expired", handleSessionExpired);
+    return () => window.removeEventListener("govflow:session-expired", handleSessionExpired);
+  }, []);
+
+  useEffect(() => {
+    if (!ready || !user || user.role === "Citizen") return;
+
+    void refreshLiveData();
+    const interval = window.setInterval(() => void refreshLiveData(), 30_000);
+    return () => window.clearInterval(interval);
+  }, [ready, user, refreshLiveData]);
 
   const updateApplication = useCallback(
     async (id: string, patch: Partial<Application>) => {

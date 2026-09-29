@@ -18,6 +18,7 @@ from app.models.data_mapping import DataMapping, DataMappingRule
 from app.models.notification import Notification
 from app.models.integration_health_check import IntegrationHealthCheck
 from app.models.workflow import Workflow, WorkflowStep
+from app.models.grievance import Grievance
 
 __all__ = [
     "User",
@@ -43,4 +44,5 @@ __all__ = [
     "IntegrationHealthCheck",
     "Workflow",
     "WorkflowStep",
+    "Grievance",
 ]

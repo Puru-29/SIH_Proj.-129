@@ -13,7 +13,7 @@ export const Route = createFileRoute("/citizen/register")({ component: CitizenRe
 
 function CitizenRegisterPage() {
   const navigate = useNavigate();
-  const { signIn } = useGovFlow();
+  const { signIn, ready } = useGovFlow();
   const [form, setForm] = useState({ name: "", email: "", phone: "", password: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -22,6 +22,7 @@ function CitizenRegisterPage() {
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!ready) return;
     setError("");
     if (!/^[A-Za-z][A-Za-z .'-]{2,119}$/.test(form.name.trim()))
       return setError("Name must contain letters and spaces only.");
@@ -64,7 +65,10 @@ function CitizenRegisterPage() {
     >
       <form onSubmit={submit} className="space-y-4">
         <div className="space-y-2 text-left">
-          <Label htmlFor="citizen-register-name" className="text-[1.05rem] font-semibold text-[#1a2b3a]">
+          <Label
+            htmlFor="citizen-register-name"
+            className="text-[1.05rem] font-semibold text-[#1a2b3a]"
+          >
             Full name
           </Label>
           <Input
@@ -78,7 +82,10 @@ function CitizenRegisterPage() {
           />
         </div>
         <div className="space-y-2 text-left">
-          <Label htmlFor="citizen-register-email" className="text-[1.05rem] font-semibold text-[#1a2b3a]">
+          <Label
+            htmlFor="citizen-register-email"
+            className="text-[1.05rem] font-semibold text-[#1a2b3a]"
+          >
             Email
           </Label>
           <Input
@@ -92,7 +99,10 @@ function CitizenRegisterPage() {
           />
         </div>
         <div className="space-y-2 text-left">
-          <Label htmlFor="citizen-register-phone" className="text-[1.05rem] font-semibold text-[#1a2b3a]">
+          <Label
+            htmlFor="citizen-register-phone"
+            className="text-[1.05rem] font-semibold text-[#1a2b3a]"
+          >
             Mobile number
           </Label>
           <Input
@@ -109,7 +119,10 @@ function CitizenRegisterPage() {
           />
         </div>
         <div className="space-y-2 text-left">
-          <Label htmlFor="citizen-register-password" className="text-[1.05rem] font-semibold text-[#1a2b3a]">
+          <Label
+            htmlFor="citizen-register-password"
+            className="text-[1.05rem] font-semibold text-[#1a2b3a]"
+          >
             Password
           </Label>
           <Input
@@ -132,14 +145,18 @@ function CitizenRegisterPage() {
         <Button
           type="submit"
           className="mt-2 h-[58px] w-full rounded-xl bg-[#0d5a49] text-lg font-bold text-white shadow-none hover:bg-[#0b4f42]"
-          disabled={loading}
+          disabled={loading || !ready}
         >
-          {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}Register as Citizen
+          {loading || !ready ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+          {!ready ? "Checking session…" : loading ? "Creating account…" : "Register as Citizen"}
         </Button>
       </form>
       <p className="mt-6 text-center text-[1.05rem] text-[#4c5f6d]">
         Already registered?{" "}
-        <Link to="/citizen/login" className="font-semibold text-[#0d5a49] underline-offset-4 hover:underline">
+        <Link
+          to="/citizen/login"
+          className="font-semibold text-[#0d5a49] underline-offset-4 hover:underline"
+        >
           Citizen sign in
         </Link>
       </p>

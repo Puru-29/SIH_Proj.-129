@@ -1,10 +1,35 @@
 import { api, type MeshApplication } from "@/lib/api";
 import type { ApplicationItem, GovernmentService } from "./api";
 
+function formatDate(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-IN", { dateStyle: "medium" }).format(date);
+}
+
+function getSubmittedAddress(application: MeshApplication): string | undefined {
+  const formData = application.form_data;
+  if (!formData) return undefined;
+  const parts = [
+    formData["address"],
+    formData["village_city"],
+    formData["taluka"],
+    formData["district"],
+    formData["state"],
+    formData["pin_code"],
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim() !== "")
+    .map((value) => value.trim());
+  const uniqueParts = [...new Set(parts)];
+  return uniqueParts.length ? uniqueParts.join(", ") : undefined;
+}
+
 function mapApplication(application: MeshApplication): ApplicationItem {
   const workflow = application.workflow ?? [];
-  const completed = workflow.filter((step) =>
-    ["completed", "recovered", "skipped"].includes(step.status.toLowerCase()),
+  const submittedAddress = getSubmittedAddress(application);
+  const progressed = workflow.filter((step) =>
+    ["completed", "recovered", "skipped", "in_progress"].includes(step.status.toLowerCase()),
   ).length;
   return {
     id: application.reference_id,
@@ -12,20 +37,21 @@ function mapApplication(application: MeshApplication): ApplicationItem {
     applicationId: application.reference_id,
     service: application.service_name ?? "",
     department: application.department_name ?? "",
-    submittedDate: application.created_at,
+    submittedDate: formatDate(application.created_at) ?? application.created_at,
     status:
       application.status === "under_review"
         ? "Under Review"
         : application.status.charAt(0).toUpperCase() + application.status.slice(1),
-    ...(workflow.length ? { progress: Math.round((completed / workflow.length) * 100) } : {}),
-    lastUpdated: application.updated_at,
+    ...(workflow.length ? { progress: Math.round((progressed / workflow.length) * 100) } : {}),
+    lastUpdated: formatDate(application.updated_at) ?? application.updated_at,
     timeline: workflow.map((step) => ({
       label: step.label,
-      date: step.completed_at ?? step.started_at ?? null,
+      date: formatDate(step.completed_at ?? step.started_at),
       completed: ["completed", "recovered", "skipped"].includes(step.status.toLowerCase()),
       inProgress: step.status.toLowerCase() === "in_progress",
     })),
     expectedNextStep: application.current_workflow_step?.name ?? "",
+    ...(submittedAddress ? { submittedAddress } : {}),
   };
 }
 

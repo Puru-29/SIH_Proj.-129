@@ -149,9 +149,13 @@ python -m alembic upgrade head
 
 Configure the PostgreSQL connection in `backend\.env` before applying migrations. For local development only, run `python seed_db.py` after migration to load sample records. Do not run the seed script in production.
 
+For local development without PostgreSQL, set `DATABASE_URL=sqlite:///./govflow.db` in `backend\.env` instead. Run migrations from the `backend` directory with `python -m alembic upgrade head`; the SQLite file is created there and is ignored by Git. Keep PostgreSQL for deployments.
+
 ### Authentication and authorization
 
 The public signup endpoints (`POST /api/v1/auth/signup` and `/register`) create citizen accounts only. Privileged accounts are provisioned through the system-admin-only `POST /api/v1/auth/users` endpoint; role changes and deactivation use `PATCH /api/v1/auth/users/{id}`.
+
+In the staff workspace, signed-in system administrators can use **User Management** to create department officer, interoperability administrator, and system administrator accounts. Staff self-registration is intentionally unavailable.
 
 Login returns a 15-minute bearer access token and sets a rotating, HttpOnly refresh-token cookie. Send the access token as `Authorization: Bearer <token>`. Refresh with `POST /api/v1/auth/refresh`; logout with `POST /api/v1/auth/logout`. Cookie-based auth endpoints reject browser origins outside the configured CORS allowlist. Production deployments must provide a unique `SECRET_KEY` of at least 32 characters, keep `DEBUG=false`, use HTTPS (`AUTH_COOKIE_SECURE=true`), and configure only trusted CORS origins. Never store refresh tokens in browser-accessible storage.
 

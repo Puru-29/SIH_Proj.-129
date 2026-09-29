@@ -1038,6 +1038,7 @@ class InteroperabilityEngine:
             provider_keys = {
                 self._compact(provider.department),
                 self._compact(provider.system_name),
+                self._compact(getattr(provider, "mapping_key", "")),
             }
             if any(
                 key and (key in provider_key or provider_key in key)

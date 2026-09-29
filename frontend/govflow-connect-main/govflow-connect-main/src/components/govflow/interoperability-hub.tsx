@@ -20,12 +20,10 @@ type HubData = {
 
 export function InteroperabilityHub({
   query,
-  systemsOnly = false,
   setQuery,
   initialTransactionId,
 }: {
   query: string;
-  systemsOnly?: boolean;
   setQuery: (value: string) => void;
   initialTransactionId?: string;
 }) {
@@ -163,7 +161,7 @@ export function InteroperabilityHub({
     <div className="space-y-5">
       <PageHeader
         eyebrow="Interoperability Command Centre"
-        title={systemsOnly ? "Connected Systems" : "Interoperability Hub"}
+        title="Interoperability Hub"
         subtitle="Connected system health and transaction activity from persisted interoperability records."
         actions={
           <Button variant="outline" onClick={() => void refresh()} disabled={loading}>
@@ -216,8 +214,12 @@ export function InteroperabilityHub({
                   <Surface key={system.id} className="space-y-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <h3 className="truncate font-bold">{system.department || system.name}</h3>
-                        <p className="mt-1 truncate text-xs text-muted-foreground">{system.name}</p>
+                        <h3 className="break-words font-bold">
+                          {system.department || system.name}
+                        </h3>
+                        <p className="mt-1 break-words text-xs text-muted-foreground">
+                          {system.name}
+                        </p>
                       </div>
                       <StatusPill
                         status={
@@ -254,14 +256,26 @@ export function InteroperabilityHub({
                         value={system.failedTransactionCount.toLocaleString()}
                       />
                       <Metric
-                        label="Failures (checks + transactions)"
+                        label="Recorded failures (cumulative)"
                         value={system.failureCount.toLocaleString()}
                       />
                       <Metric label="Last failure" value={formatDate(system.lastFailureAt)} />
                     </dl>
                     {system.lastFailureMessage ? (
-                      <p className="border-t border-border pt-3 text-xs text-danger">
-                        Latest health-check error: {system.lastFailureMessage}
+                      <p
+                        className={`border-t pt-3 text-xs ${
+                          hasRecoveredSinceFailure(system)
+                            ? "border-border text-muted-foreground"
+                            : "border-border text-danger"
+                        }`}
+                      >
+                        {hasRecoveredSinceFailure(system)
+                          ? "Previous health-check error (recovered): "
+                          : "Latest health-check error: "}
+                        {system.lastFailureMessage}
+                        {hasRecoveredSinceFailure(system)
+                          ? ` A successful check was recorded at ${formatDate(system.lastSuccessfulRequestAt)}.`
+                          : ""}
                       </p>
                     ) : null}
                   </Surface>
@@ -276,163 +290,161 @@ export function InteroperabilityHub({
             )}
           </section>
 
-          {!systemsOnly ? (
-            <>
-              <section className="space-y-3" aria-labelledby="transactions-heading">
-                <div>
-                  <h2 id="transactions-heading" className="text-base font-bold">
-                    Interoperability transactions
-                  </h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Select a transaction to load its persisted event timeline.
-                  </p>
-                </div>
-                {transactions.length ? (
-                  <div className="surface overflow-x-auto">
-                    <table className="w-full min-w-[1050px] text-left text-sm">
-                      <thead className="border-b border-border text-xs uppercase text-muted-foreground">
-                        <tr>
-                          {[
-                            "Transaction ID",
-                            "Source",
-                            "Destination",
-                            "Application",
-                            "Data Type",
-                            "Status",
-                            "Started",
-                            "Completed",
-                          ].map((heading) => (
-                            <th key={heading} className="px-3 py-3 font-semibold">
-                              {heading}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border">
-                        {transactions.map((item) => (
-                          <tr key={item.transactionId}>
-                            <td className="px-3 py-3">
-                              <button
-                                className="font-semibold text-primary hover:underline"
-                                onClick={() => setSelectedId(item.transactionId)}
-                              >
-                                {item.transactionId}
-                              </button>
-                            </td>
-                            <td className="px-3 py-3">{item.source}</td>
-                            <td className="px-3 py-3">{item.destination}</td>
-                            <td className="px-3 py-3">
-                              {item.applicationReference || `Application #${item.applicationId}`}
-                            </td>
-                            <td className="px-3 py-3">{item.dataType}</td>
-                            <td className="px-3 py-3">
-                              <StatusPill status={formatStatus(item.status)} />
-                            </td>
-                            <td className="px-3 py-3">{formatDate(item.startedAt)}</td>
-                            <td className="px-3 py-3">{formatDate(item.completedAt)}</td>
-                          </tr>
+          <>
+            <section className="space-y-3" aria-labelledby="transactions-heading">
+              <div>
+                <h2 id="transactions-heading" className="text-base font-bold">
+                  Interoperability transactions
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Select a transaction to load its persisted event timeline.
+                </p>
+              </div>
+              {transactions.length ? (
+                <div className="surface overflow-x-auto">
+                  <table className="w-full min-w-[1050px] text-left text-sm">
+                    <thead className="border-b border-border text-xs uppercase text-muted-foreground">
+                      <tr>
+                        {[
+                          "Transaction ID",
+                          "Source",
+                          "Destination",
+                          "Application",
+                          "Data Type",
+                          "Status",
+                          "Started",
+                          "Completed",
+                        ].map((heading) => (
+                          <th key={heading} className="px-3 py-3 font-semibold">
+                            {heading}
+                          </th>
                         ))}
-                      </tbody>
-                    </table>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {transactions.map((item) => (
+                        <tr key={item.transactionId}>
+                          <td className="px-3 py-3">
+                            <button
+                              className="font-semibold text-primary hover:underline"
+                              onClick={() => setSelectedId(item.transactionId)}
+                            >
+                              {item.transactionId}
+                            </button>
+                          </td>
+                          <td className="px-3 py-3">{item.source}</td>
+                          <td className="px-3 py-3">{item.destination}</td>
+                          <td className="px-3 py-3">
+                            {item.applicationReference || `Application #${item.applicationId}`}
+                          </td>
+                          <td className="px-3 py-3">{item.dataType}</td>
+                          <td className="px-3 py-3">
+                            <StatusPill status={formatStatus(item.status)} />
+                          </td>
+                          <td className="px-3 py-3">{formatDate(item.startedAt)}</td>
+                          <td className="px-3 py-3">{formatDate(item.completedAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <Surface>
+                  <p className="text-sm text-muted-foreground">
+                    No interoperability transactions have been recorded.
+                  </p>
+                </Surface>
+              )}
+            </section>
+
+            <section className="grid gap-4 xl:grid-cols-2">
+              <Surface>
+                <h2 className="text-base font-bold">Data mappings</h2>
+                {data.mappings.length ? (
+                  <div className="mt-3 space-y-2">
+                    {data.mappings.map((mapping) => (
+                      <div key={mapping.id} className="rounded-lg border border-border p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-semibold">{mapping.name}</span>
+                          <StatusPill status={formatStatus(mapping.status)} />
+                        </div>
+                        <p className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+                          {mapping.sourceSystem || mapping.source}
+                          <ArrowRight className="size-3 shrink-0" />
+                          {mapping.targetSystem || mapping.target}
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Version {mapping.version} · {mapping.rules.length} persisted rules
+                        </p>
+                      </div>
+                    ))}
                   </div>
                 ) : (
-                  <Surface>
-                    <p className="text-sm text-muted-foreground">
-                      No interoperability transactions have been recorded.
-                    </p>
-                  </Surface>
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    No data mappings have been configured.
+                  </p>
                 )}
-              </section>
-
-              <section className="grid gap-4 xl:grid-cols-2">
-                <Surface>
-                  <h2 className="text-base font-bold">Data mappings</h2>
-                  {data.mappings.length ? (
-                    <div className="mt-3 space-y-2">
-                      {data.mappings.map((mapping) => (
-                        <div key={mapping.id} className="rounded-lg border border-border p-3">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <span className="font-semibold">{mapping.name}</span>
-                            <StatusPill status={formatStatus(mapping.status)} />
-                          </div>
-                          <p className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
-                            {mapping.sourceSystem || mapping.source}
-                            <ArrowRight className="size-3 shrink-0" />
-                            {mapping.targetSystem || mapping.target}
-                          </p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            Version {mapping.version} · {mapping.rules.length} persisted rules
-                          </p>
+              </Surface>
+              <Surface>
+                <h2 className="text-base font-bold">Exceptions</h2>
+                {retryNotice ? (
+                  <p role="status" className="mt-3 text-sm text-success">
+                    {retryNotice}
+                  </p>
+                ) : null}
+                {retryError ? (
+                  <p role="alert" className="mt-3 text-sm text-danger">
+                    {retryError}
+                  </p>
+                ) : null}
+                {data.exceptions.length ? (
+                  <div className="mt-3 space-y-2">
+                    {data.exceptions.map((exception) => (
+                      <div key={exception.id} className="rounded-lg border border-border p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-semibold">
+                            {exception.sourceSystem || exception.system} ·{" "}
+                            {exception.type || exception.category}
+                          </span>
+                          <StatusPill status={formatStatus(exception.status)} />
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="mt-3 text-sm text-muted-foreground">
-                      No data mappings have been configured.
-                    </p>
-                  )}
-                </Surface>
-                <Surface>
-                  <h2 className="text-base font-bold">Exceptions</h2>
-                  {retryNotice ? (
-                    <p role="status" className="mt-3 text-sm text-success">
-                      {retryNotice}
-                    </p>
-                  ) : null}
-                  {retryError ? (
-                    <p role="alert" className="mt-3 text-sm text-danger">
-                      {retryError}
-                    </p>
-                  ) : null}
-                  {data.exceptions.length ? (
-                    <div className="mt-3 space-y-2">
-                      {data.exceptions.map((exception) => (
-                        <div key={exception.id} className="rounded-lg border border-border p-3">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <span className="font-semibold">
-                              {exception.sourceSystem || exception.system} ·{" "}
-                              {exception.type || exception.category}
-                            </span>
-                            <StatusPill status={formatStatus(exception.status)} />
-                          </div>
-                          <p className="mt-1 text-sm">{exception.message}</p>
-                          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                            <p className="text-xs text-muted-foreground">
-                              {exception.severity} · {formatDate(exception.createdAt)}
-                              {exception.transactionId ? ` · ${exception.transactionId}` : ""}
-                              {exception.applicationId
-                                ? ` · Application ${exception.applicationId}`
-                                : ""}
-                              {` · ${exception.retryCount} retries`}
-                            </p>
-                            {["OPEN", "ESCALATED"].includes(exception.status) ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => void retry(exception)}
-                                disabled={retryingId !== null}
-                              >
-                                <RefreshCw
-                                  className={`mr-2 size-3.5 ${
-                                    retryingId === exception.id ? "animate-spin" : ""
-                                  }`}
-                                />
-                                {retryingId === exception.id ? "Retrying…" : "Retry connector"}
-                              </Button>
-                            ) : null}
-                          </div>
+                        <p className="mt-1 text-sm">{exception.message}</p>
+                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs text-muted-foreground">
+                            {exception.severity} · {formatDate(exception.createdAt)}
+                            {exception.transactionId ? ` · ${exception.transactionId}` : ""}
+                            {exception.applicationId
+                              ? ` · Application ${exception.applicationId}`
+                              : ""}
+                            {` · ${exception.retryCount} retries`}
+                          </p>
+                          {["OPEN", "ESCALATED"].includes(exception.status) ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void retry(exception)}
+                              disabled={retryingId !== null}
+                            >
+                              <RefreshCw
+                                className={`mr-2 size-3.5 ${
+                                  retryingId === exception.id ? "animate-spin" : ""
+                                }`}
+                              />
+                              {retryingId === exception.id ? "Retrying…" : "Retry connector"}
+                            </Button>
+                          ) : null}
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="mt-3 text-sm text-muted-foreground">
-                      No interoperability exceptions have been recorded.
-                    </p>
-                  )}
-                </Surface>
-              </section>
-            </>
-          ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    No interoperability exceptions have been recorded.
+                  </p>
+                )}
+              </Surface>
+            </section>
+          </>
         </>
       ) : null}
 
@@ -446,6 +458,19 @@ export function InteroperabilityHub({
       ) : null}
     </div>
   );
+}
+
+function hasRecoveredSinceFailure(system: ConnectedSystemMetrics): boolean {
+  if (
+    system.healthStatus !== "active" ||
+    !system.lastFailureAt ||
+    !system.lastSuccessfulRequestAt
+  ) {
+    return false;
+  }
+  const failureTime = Date.parse(system.lastFailureAt);
+  const successTime = Date.parse(system.lastSuccessfulRequestAt);
+  return Number.isFinite(failureTime) && Number.isFinite(successTime) && successTime >= failureTime;
 }
 
 function TransactionDetail({

@@ -220,7 +220,14 @@ class WorkflowEngine:
         service_key = f"{service.code} {service.name}".casefold()
         is_scholarship = "post_matric" in service_key or "post-matric" in service_key
         if definition is not None and (
-            not is_scholarship or self._is_current_scholarship_definition(definition)
+            (
+                not is_scholarship
+                and not self._is_legacy_generic_definition(definition, service)
+            )
+            or (
+                is_scholarship
+                and self._is_current_scholarship_definition(definition)
+            )
         ):
             return definition
         if is_scholarship:
@@ -236,7 +243,7 @@ class WorkflowEngine:
                 "steps": [
                     {
                         "step_id": "officer_review",
-                        "name": "Officer review",
+                        "name": f"Review {service.name} application",
                         "department": department,
                         "type": "OFFICER_REVIEW",
                         "order": 0,
@@ -246,7 +253,7 @@ class WorkflowEngine:
                     },
                     {
                         "step_id": "approval",
-                        "name": "Approve application",
+                        "name": f"Approve {service.name} application",
                         "department": department,
                         "type": "APPROVAL",
                         "order": 1,
@@ -256,7 +263,7 @@ class WorkflowEngine:
                     },
                     {
                         "step_id": "rejection",
-                        "name": "Reject application",
+                        "name": f"Reject {service.name} application",
                         "department": department,
                         "type": "REJECTION",
                         "order": 2,
@@ -266,7 +273,7 @@ class WorkflowEngine:
                     },
                     {
                         "step_id": "notification",
-                        "name": "Notify applicant",
+                        "name": f"Notify {service.name} applicant",
                         "department": department,
                         "type": "NOTIFICATION",
                         "order": 3,
@@ -279,7 +286,7 @@ class WorkflowEngine:
                     },
                     {
                         "step_id": "completion",
-                        "name": "Complete application workflow",
+                        "name": f"Complete {service.name} workflow",
                         "department": department,
                         "type": "COMPLETION",
                         "order": 4,
@@ -300,6 +307,26 @@ class WorkflowEngine:
             {**template, "service_id": service.id}
         )
         return self.create_definition(db, payload)
+
+    @staticmethod
+    def _is_legacy_generic_definition(
+        definition: Workflow, service: Service
+    ) -> bool:
+        legacy_steps = (
+            ("officer_review", "Officer review"),
+            ("approval", "Approve application"),
+            ("rejection", "Reject application"),
+            ("notification", "Notify applicant"),
+            ("completion", "Complete application workflow"),
+        )
+        return (
+            definition.name == f"{service.name} workflow"
+            and tuple(
+                (step.step_key, step.name)
+                for step in sorted(definition.steps, key=lambda item: item.sequence)
+            )
+            == legacy_steps
+        )
 
     def create_definition(
         self,

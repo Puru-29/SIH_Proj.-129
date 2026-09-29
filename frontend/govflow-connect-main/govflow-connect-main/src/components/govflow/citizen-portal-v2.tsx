@@ -132,6 +132,7 @@ export function CitizenPortalApp({ page = "dashboard" }: { page?: CitizenPage })
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [citizenAuthenticated, setCitizenAuthenticated] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [serviceCategory, setServiceCategory] = useState<string>("All");
   const [applications, setApplications] = useState<ApplicationItem[]>([]);
@@ -166,20 +167,25 @@ export function CitizenPortalApp({ page = "dashboard" }: { page?: CitizenPage })
   useEffect(() => {
     let isMounted = true;
     setLoading(true);
-    Promise.allSettled([
-      getCitizenProfile(),
-      getServices(),
-      getApplications(),
-      getVerifiedRecords(),
-      getConsentRequests(),
-      getDocuments(),
-      getNotifications(),
-      getGrievances(),
-    ])
-      .then((results) => {
+    void getCitizenProfile()
+      .then(async (profileData) => {
+        if (!isMounted) return;
+        if (!profileData) {
+          navigate({ to: "/citizen/login", replace: true });
+          return;
+        }
+        setCitizenAuthenticated(true);
+        const results = await Promise.allSettled([
+          getServices(),
+          getApplications(),
+          getVerifiedRecords(),
+          getConsentRequests(),
+          getDocuments(),
+          getNotifications(),
+          getGrievances(),
+        ]);
         if (!isMounted) return;
         const [
-          profileResult,
           servicesResult,
           applicationsResult,
           recordsResult,
@@ -196,7 +202,6 @@ export function CitizenPortalApp({ page = "dashboard" }: { page?: CitizenPage })
               : "Some account data could not be loaded."
             : "",
         );
-        const profileData = profileResult.status === "fulfilled" ? profileResult.value : null;
         const servicesData = servicesResult.status === "fulfilled" ? servicesResult.value : [];
         const applicationsData =
           applicationsResult.status === "fulfilled" ? applicationsResult.value : [];
@@ -207,7 +212,20 @@ export function CitizenPortalApp({ page = "dashboard" }: { page?: CitizenPage })
           notificationsResult.status === "fulfilled" ? notificationsResult.value : [];
         const grievancesData =
           grievancesResult.status === "fulfilled" ? grievancesResult.value : [];
-        if (profileData) setProfile(profileData);
+        const addressFromRecentApplication = applicationsData.find(
+          (application) => application.submittedAddress,
+        )?.submittedAddress;
+        if (profileData) {
+          setProfile({
+            ...profileData,
+            ...(!profileData.address && addressFromRecentApplication
+              ? {
+                  address: addressFromRecentApplication,
+                  addressSource: "latest application",
+                }
+              : {}),
+          });
+        }
         setServices(servicesData);
         setApplications(applicationsData);
         setSelectedAppId((current) => applicationsData[0]?.applicationId ?? current);
@@ -228,14 +246,20 @@ export function CitizenPortalApp({ page = "dashboard" }: { page?: CitizenPage })
 
         setLoading(false);
       })
+      .catch((error: unknown) => {
+        if (!isMounted) return;
+        setLoadError(
+          error instanceof Error ? error.message : "Your citizen account could not be verified.",
+        );
+        setLoading(false);
+      })
       .finally(() => {
         if (isMounted) setLoading(false);
       });
-
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [navigate]);
 
   const selectedApplication = applications.find(
     (application) => application.applicationId === selectedAppId,
@@ -384,6 +408,16 @@ export function CitizenPortalApp({ page = "dashboard" }: { page?: CitizenPage })
       toast.error(error instanceof Error ? error.message : "Grievance could not be submitted.");
     }
   };
+
+  if (!citizenAuthenticated) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-background p-6">
+        <p role="status" className="text-sm text-muted-foreground">
+          Checking your citizen session…
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="citizen-portal">
@@ -763,6 +797,11 @@ export function CitizenPortalApp({ page = "dashboard" }: { page?: CitizenPage })
                               </span>
                             </div>
                           ))}
+                          {!records.length ? (
+                            <p style={{ fontSize: "0.8rem", color: "#465766" }}>
+                              No records have been returned by connected departments yet.
+                            </p>
+                          ) : null}
                         </div>
                         <Button
                           className="mt-4 w-full"
@@ -1472,19 +1511,21 @@ export function CitizenPortalApp({ page = "dashboard" }: { page?: CitizenPage })
                       </div>
 
                       <div
+                        className="citizen-application-detail-timeline"
                         style={{
-                          marginTop: "1rem",
-                          display: "flex",
-                          flexWrap: "wrap",
-                          gap: "0.8rem",
+                          marginTop: "1.25rem",
                         }}
                       >
                         {selectedApplication.timeline.map((step, index) => (
                           <div
                             key={`${step.label}-${index}`}
-                            className={`citizen-timeline-stage ${step.completed ? "completed" : step.inProgress ? "in_progress" : "pending"}`}
+                            className={`citizen-application-detail-stage ${step.completed ? "completed" : step.inProgress ? "in_progress" : "pending"}`}
                           >
-                            <span>
+                            <span
+                              className="citizen-application-detail-marker"
+                              aria-hidden="true"
+                            />
+                            <span className="citizen-application-detail-status">
                               {step.completed
                                 ? "Complete"
                                 : step.inProgress
@@ -1629,6 +1670,19 @@ export function CitizenPortalApp({ page = "dashboard" }: { page?: CitizenPage })
                         </Button>
                       </div>
                     ))}
+                    {!records.length ? (
+                      <div className="surface" style={{ padding: "1.25rem" }}>
+                        <h2 style={{ marginTop: 0 }}>No verified records yet</h2>
+                        <p style={{ color: "#465766" }}>
+                          Verified records appear here after you approve a data request and a
+                          connected department returns the information. No records have been
+                          returned for your applications yet.
+                        </p>
+                        <Button onClick={() => navigateToCitizenPage(navigate, "services")}>
+                          Browse services
+                        </Button>
+                      </div>
+                    ) : null}
                   </div>
                 </>
               )}
@@ -2038,12 +2092,23 @@ export function CitizenPortalApp({ page = "dashboard" }: { page?: CitizenPage })
                     </div>
                     {profile.address ? (
                       <div className="surface" style={{ padding: "1rem" }}>
-                        <h3>Address</h3>
+                        <h3>
+                          {profile.addressSource
+                            ? `Address from ${profile.addressSource}`
+                            : "Address"}
+                        </h3>
                         <p style={{ marginTop: "0.8rem", color: "#465766", fontSize: "0.8rem" }}>
                           {profile.address}
                         </p>
                       </div>
-                    ) : null}
+                    ) : (
+                      <div className="surface" style={{ padding: "1rem" }}>
+                        <h3>Address</h3>
+                        <p style={{ marginTop: "0.8rem", color: "#465766", fontSize: "0.8rem" }}>
+                          No address has been added to your profile or recent applications.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </>
               )}

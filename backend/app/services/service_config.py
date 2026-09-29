@@ -262,7 +262,12 @@ FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
     "property_address": {"type": "text", "label": "Property address", "required": True},
     "verification_purpose": {"type": "text", "label": "Reason for verification", "required": True},
     "family_category": {"type": "select", "label": "Family category", "required": True, "options": ["SC", "ST", "OBC", "VJNT", "SBC", "Other"]},
-    "sub_caste": {"type": "text", "label": "Sub-caste", "required": True},
+    "sub_caste": {
+        "type": "text",
+        "label": "Sub-caste",
+        "help_text": "Enter the specific caste or community name shown on your supporting documents; this is more specific than the family category above.",
+        "required": True,
+    },
     "land_record_type": {"type": "select", "label": "Land record type", "required": True, "options": ["Ownership extract", "Mutation record", "Survey record", "Other"]},
     "mutation_reference": {"type": "text", "label": "Mutation reference (if known)", "required": False},
     "student_id": {"type": "text", "label": "Student ID / enrollment number", "required": True},
@@ -398,6 +403,7 @@ def get_service_config(service: Any) -> dict[str, Any]:
     config = deepcopy(SERVICE_CONFIGS[key])
     config.pop("workflow", None)
     personal_extras = {
+        "CASTE": ["gender"],
         "PRE_MATRIC": ["date_of_birth", "gender"],
         "POST_MATRIC": ["date_of_birth", "gender"],
         "FARMER": ["date_of_birth", "gender"],

@@ -52,6 +52,7 @@ class UserRead(BaseModel):
     aadhaar_last4: str | None
     role: str
     is_active: bool
+    staff_request_pending: bool = False
     created_at: datetime
 
     @model_validator(mode="before")
@@ -76,6 +77,7 @@ class UserRead(BaseModel):
                 "aadhaar_last4": value.aadhaar_last4,
                 "role": role_record.key if role_record is not None else role_map[value.role],
                 "is_active": value.is_active,
+                "staff_request_pending": value.staff_request_pending,
                 "created_at": value.created_at,
             }
         if isinstance(value, dict):

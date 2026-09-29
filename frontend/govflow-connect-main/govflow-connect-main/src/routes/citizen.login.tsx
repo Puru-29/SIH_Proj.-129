@@ -13,7 +13,7 @@ export const Route = createFileRoute("/citizen/login")({ component: CitizenLogin
 
 function CitizenLoginPage() {
   const navigate = useNavigate();
-  const { signIn } = useGovFlow();
+  const { signIn, ready } = useGovFlow();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -21,6 +21,7 @@ function CitizenLoginPage() {
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!ready) return;
     setError("");
     if (password.length < 8 || password.length > 16) {
       setError("Password must be between 8 and 16 characters.");
@@ -88,9 +89,9 @@ function CitizenLoginPage() {
         {error ? (
           <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
         ) : null}
-        <Button type="submit" className="w-full" disabled={loading}>
-          {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
-          Sign in as Citizen
+        <Button type="submit" className="w-full" disabled={loading || !ready}>
+          {loading || !ready ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+          {!ready ? "Checking session…" : loading ? "Signing in…" : "Sign in as Citizen"}
         </Button>
       </form>
 

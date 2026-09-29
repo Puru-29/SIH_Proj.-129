@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
   Bell,
-  Boxes,
   Building2,
   ChevronDown,
   FileStack,
@@ -58,7 +57,6 @@ const NAV = [
     group: "Interoperability",
     items: [
       { to: "monitoring", label: "Interoperability Hub", icon: Activity },
-      { to: "integrations", label: "Connected Systems", icon: Boxes },
       { to: "consent", label: "Consent Requests", icon: ShieldCheck },
     ],
   },
@@ -76,6 +74,7 @@ const NAV = [
       { to: "audit-logs", label: "Audit Trail", icon: FileText },
       { to: "ai-document-verification", label: "AI Document Verification", icon: ShieldCheck },
       { to: "settings", label: "Profile / Settings", icon: Settings },
+      { to: "users", label: "User Management", icon: Users, adminOnly: true },
     ],
   },
 ] as const;
@@ -178,18 +177,25 @@ export function AppShell({ children }: { children: ReactNode }) {
               <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#50657a]">
                 {group.group}
               </p>
-              {group.items.map((item) => (
-                <Link
-                  key={`${group.group}-${item.label}`}
-                  to={item.to === "dashboard" ? "/dashboard" : "/$feature"}
-                  params={item.to === "dashboard" ? {} : { feature: item.to }}
-                  className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-sidebar-foreground/75 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[status=active]:bg-sidebar-accent data-[status=active]:text-sidebar-accent-foreground"
-                  activeProps={{ className: "bg-sidebar-accent text-sidebar-accent-foreground" }}
-                >
-                  <item.icon className="size-4.5 shrink-0" />
-                  <span className="truncate">{item.label}</span>
-                </Link>
-              ))}
+              {group.items
+                .filter(
+                  (item) =>
+                    !("adminOnly" in item) ||
+                    !item.adminOnly ||
+                    user?.backendRole === "system_admin",
+                )
+                .map((item) => (
+                  <Link
+                    key={`${group.group}-${item.label}`}
+                    to={item.to === "dashboard" ? "/dashboard" : "/$feature"}
+                    params={item.to === "dashboard" ? {} : { feature: item.to }}
+                    className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-sidebar-foreground/75 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[status=active]:bg-sidebar-accent data-[status=active]:text-sidebar-accent-foreground"
+                    activeProps={{ className: "bg-sidebar-accent text-sidebar-accent-foreground" }}
+                  >
+                    <item.icon className="size-4.5 shrink-0" />
+                    <span className="truncate">{item.label}</span>
+                  </Link>
+                ))}
             </div>
           ))}
         </nav>

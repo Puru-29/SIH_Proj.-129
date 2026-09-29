@@ -7,7 +7,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-import fitz
+import pymupdf
 from PIL import Image, UnidentifiedImageError
 from sqlalchemy.orm import Session
 
@@ -158,8 +158,8 @@ class DocumentVerificationService:
         ocr_confidences: list[float] = []
         if extension == "pdf":
             try:
-                pdf = fitz.open(stream=content, filetype="pdf")
-            except (fitz.FileDataError, RuntimeError) as exc:
+                pdf = pymupdf.open(stream=content, filetype="pdf")
+            except (pymupdf.FileDataError, RuntimeError) as exc:
                 raise DocumentInputError("The PDF is damaged or cannot be read.") from exc
             if pdf.is_encrypted:
                 raise DocumentInputError("Password-protected PDFs are not supported.")
@@ -172,7 +172,7 @@ class DocumentVerificationService:
                 if page_text:
                     text_parts.append(page_text)
                     continue
-                png_bytes = page.get_pixmap(matrix=fitz.Matrix(2, 2)).tobytes("png")
+                png_bytes = page.get_pixmap(matrix=pymupdf.Matrix(2, 2)).tobytes("png")
                 ocr_text, ocr_confidence = DocumentVerificationService._ocr(png_bytes)
                 if ocr_text:
                     text_parts.append(ocr_text)

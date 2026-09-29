@@ -31,7 +31,7 @@ export const Route = createFileRoute("/login")({
 
 function LoginPage() {
   const navigate = useNavigate();
-  const { signIn } = useGovFlow();
+  const { signIn, ready } = useGovFlow();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [mobile, setMobile] = useState("");
@@ -40,6 +40,7 @@ function LoginPage() {
 
   const submitEmail = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!ready) return;
     setError("");
     if (!/^\S+@\S+\.\S+$/.test(email)) return setError("Enter a valid government email address.");
     if (password.length < 8 || password.length > 16)
@@ -124,7 +125,10 @@ function LoginPage() {
                 <Label htmlFor="password" className="text-[1.1rem] font-semibold text-[#1d2d3d]">
                   Password
                 </Label>
-                <Link to="/forgot-password" className="text-[0.95rem] font-semibold text-[#0d5a49] hover:underline">
+                <Link
+                  to="/forgot-password"
+                  className="text-[0.95rem] font-semibold text-[#0d5a49] hover:underline"
+                >
                   Forgot password?
                 </Link>
               </div>
@@ -147,10 +151,10 @@ function LoginPage() {
             <Button
               type="submit"
               className="mt-2 h-[58px] w-full rounded-xl bg-[#0d5a49] text-lg font-bold text-white shadow-none hover:bg-[#0b4f42]"
-              disabled={loading}
+              disabled={loading || !ready}
             >
-              {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
-              Sign in
+              {loading || !ready ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+              {!ready ? "Checking session…" : loading ? "Signing in…" : "Sign in"}
             </Button>
           </form>
         </TabsContent>
@@ -190,18 +194,34 @@ function LoginPage() {
 
       <p className="mt-6 text-center text-[1.05rem] text-[#4c5f6d]">
         New citizen?{" "}
-        <Link to="/citizen/register" className="font-semibold text-[#0d5a49] underline-offset-4 hover:underline">
+        <Link
+          to="/citizen/register"
+          className="font-semibold text-[#0d5a49] underline-offset-4 hover:underline"
+        >
           Create a citizen account
         </Link>
       </p>
       <p className="mt-2 text-center text-[1.05rem] text-[#4c5f6d]">
+        Need staff access?{" "}
+        <Link
+          to="/staff/request"
+          className="font-semibold text-[#0d5a49] underline-offset-4 hover:underline"
+        >
+          Request a staff account
+        </Link>
+      </p>
+      <p className="mt-2 text-center text-[1.05rem] text-[#4c5f6d]">
         Citizen?{" "}
-        <Link to="/citizen/login" className="font-semibold text-[#0d5a49] underline-offset-4 hover:underline">
+        <Link
+          to="/citizen/login"
+          className="font-semibold text-[#0d5a49] underline-offset-4 hover:underline"
+        >
           Open Citizen Portal
         </Link>
       </p>
       <p className="mt-2 text-center text-[0.95rem] text-[#4c5f6d]">
-        Use your Government Staff account credentials to continue.
+        Staff accounts are provisioned by a system administrator. Contact your administrator if you
+        need access.
       </p>
     </AuthLayout>
   );

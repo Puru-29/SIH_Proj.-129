@@ -181,8 +181,8 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
     let cancelled = false;
     setLoading(true);
     setSetupError("");
-    Promise.all([api.getMe(), api.getServices(), api.getPlatforms(), api.getDepartments()])
-      .then(async ([me, services, meshPlatforms, meshDepartments]) => {
+    Promise.all([api.getMe(), api.getServices(), api.getDepartments()])
+      .then(async ([me, services, meshDepartments]) => {
         if (!me || me.role !== "citizen") {
           throw new Error("Sign in with a citizen account before starting an application.");
         }
@@ -197,6 +197,9 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
         if (!workflow) {
           throw new Error("No active backend workflow is configured for this service.");
         }
+        const applicationSources = workflow.steps.some((step) => step.type === "DATA_REQUEST")
+          ? await api.getServiceApplicationSources(match.id)
+          : [];
         const department = meshDepartments.find((item) => item.id === match.department_id);
         if (!department) {
           throw new Error("The service department is not configured in the backend.");
@@ -224,7 +227,7 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
                 normalize(step.department!).includes(normalize(item.name)),
             );
             const sourcePlatform = sourceDepartment
-              ? meshPlatforms.find((item) => item.department_id === sourceDepartment.id)
+              ? applicationSources.find((item) => item.department_id === sourceDepartment.id)
               : undefined;
             if (!sourceDepartment || !sourcePlatform) {
               throw new Error(`No connected source system is configured for ${step.department}.`);
@@ -232,7 +235,7 @@ export function ApplicationWizard({ service, records, citizenAddress, onBack, on
             return {
               key: step.step_id,
               sourceDepartment: step.department,
-              sourcePlatformId: sourcePlatform.id,
+              sourcePlatformId: sourcePlatform.platform_id,
               dataRequested: requestedData,
               requestedData: requestedDataScope,
               purpose: `${workflow.name} eligibility verification`,

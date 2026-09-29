@@ -1,6 +1,11 @@
 import axios from "axios";
 import { getAccessToken, setAccessToken } from "@/lib/auth-token";
-import { apiErrorMessage, authenticatedApiClient } from "@/lib/http";
+import {
+  apiErrorMessage,
+  authenticatedApiClient,
+  markSessionActive,
+  refreshAccessToken,
+} from "@/lib/http";
 
 export interface ApiResponse<T> {
   data?: T;
@@ -26,6 +31,7 @@ export interface UserProfile {
     | "system_admin"
     | "interoperability_admin";
   is_active: boolean;
+  staff_request_pending?: boolean;
   created_at: string;
 }
 
@@ -36,7 +42,30 @@ export interface MeshUser {
   role: UserProfile["role"];
   department?: string | null;
   is_active: boolean;
+  staff_request_pending?: boolean;
   created_at: string;
+}
+
+export type ManagedStaffRole = "department_officer" | "interoperability_admin" | "system_admin";
+
+export type StaffRequestRole = "department_officer" | "interoperability_admin";
+
+export interface ManagedUserCreate {
+  full_name: string;
+  email: string;
+  password: string;
+  role: ManagedStaffRole;
+  phone?: string;
+  department_id?: number;
+}
+
+export interface StaffAccountRequest {
+  full_name: string;
+  email: string;
+  password: string;
+  role: StaffRequestRole;
+  phone?: string;
+  department_id?: number;
 }
 
 export interface AuthResponse {
@@ -78,6 +107,12 @@ export interface MeshDepartment {
   id: number;
   name: string;
   code?: string;
+}
+
+export interface ServiceApplicationSource {
+  department: string;
+  department_id: number;
+  platform_id: number;
 }
 
 export interface MeshService {
@@ -603,46 +638,22 @@ export interface AuditLogFilters {
   offset?: number;
 }
 
-let refreshPromise: Promise<AuthResponse | null> | null = null;
-
 export function getStoredToken(): string | null {
   return getAccessToken();
 }
 
 export function setStoredToken(token: string): void {
   setAccessToken(token);
+  markSessionActive();
 }
 
 export function clearStoredToken(): void {
   setAccessToken(null);
 }
 
-async function refreshAccessToken(): Promise<AuthResponse | null> {
-  if (refreshPromise) return refreshPromise;
-
-  refreshPromise = (async () => {
-    try {
-      const { data: result } = await authenticatedApiClient.post<AuthResponse>("/auth/refresh");
-      if (!result.access_token) {
-        clearStoredToken();
-        return null;
-      }
-      setStoredToken(result.access_token);
-      return result;
-    } catch {
-      clearStoredToken();
-      return null;
-    } finally {
-      refreshPromise = null;
-    }
-  })();
-
-  return refreshPromise;
-}
-
 async function request<T>(
   endpoint: string,
-  options: RequestInit = {},
+  options: RequestInit & { timeoutMs?: number } = {},
 ): Promise<{ data: T | null; error: string | null; status: number }> {
   try {
     const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
@@ -654,6 +665,7 @@ async function request<T>(
         ...Object.fromEntries(new Headers(options.headers).entries()),
         ...(options.body && !isFormData ? { "Content-Type": "application/json" } : {}),
       },
+      ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
     });
     return { data: response.data, error: null, status: response.status };
@@ -698,14 +710,10 @@ export const api = {
       body: JSON.stringify({ email, password }),
     });
     if (res.error) throw new Error(res.error);
-    if (!res.data?.access_token) throw new Error("Sign in did not return an access token.");
+    if (!res.data?.access_token || !res.data.user)
+      throw new Error("Sign in did not return a valid authentication response.");
     setStoredToken(res.data.access_token);
-    const profile = await api.getMe();
-    if (!profile) {
-      clearStoredToken();
-      throw new Error("Unable to load your account profile.");
-    }
-    return { ...res.data!, user: profile };
+    return res.data;
   },
 
   async signup(data: {
@@ -722,14 +730,10 @@ export const api = {
       body: JSON.stringify({ full_name, email, password, phone, aadhaar_last4 }),
     });
     if (res.error) throw new Error(res.error);
-    if (!res.data?.access_token) throw new Error("Registration did not return an access token.");
+    if (!res.data?.access_token || !res.data.user)
+      throw new Error("Registration did not return a valid authentication response.");
     setStoredToken(res.data.access_token);
-    const profile = await api.getMe();
-    if (!profile) {
-      clearStoredToken();
-      throw new Error("Unable to load your account profile.");
-    }
-    return { ...res.data!, user: profile };
+    return res.data;
   },
 
   async getMe(): Promise<UserProfile | null> {
@@ -740,6 +744,39 @@ export const api = {
   async getUsers(): Promise<MeshUser[]> {
     const res = await request<MeshUser[]>("/auth/users");
     if (res.error || !res.data) throw new Error(res.error || "User records could not be loaded.");
+    return res.data;
+  },
+
+  async createManagedUser(data: ManagedUserCreate): Promise<UserProfile> {
+    const res = await request<UserProfile>("/auth/users", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Staff account could not be created.");
+    }
+    return res.data;
+  },
+
+  async requestStaffAccount(data: StaffAccountRequest): Promise<{ message: string }> {
+    const res = await request<{ message: string }>("/auth/staff-requests", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Staff account request could not be submitted.");
+    }
+    return res.data;
+  },
+
+  async updateManagedUser(id: number, data: { is_active: boolean }): Promise<UserProfile> {
+    const res = await request<UserProfile>(`/auth/users/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Staff account could not be updated.");
+    }
     return res.data;
   },
 
@@ -958,6 +995,14 @@ export const api = {
     return res.data;
   },
 
+  async getServiceApplicationSources(id: number | string): Promise<ServiceApplicationSource[]> {
+    const res = await request<ServiceApplicationSource[]>(`/services/${id}/application-sources`);
+    if (res.error || !res.data) {
+      throw new Error(res.error || "Application data sources could not be loaded.");
+    }
+    return res.data;
+  },
+
   async getConnectedSystems(): Promise<ConnectedSystemMetrics[]> {
     const res = await request<ConnectedSystemMetrics[]>("/integrations");
     if (res.error || !res.data) {
@@ -1167,6 +1212,7 @@ export const api = {
     const res = await request<MeshDocumentVerificationResponse>("/documents/upload-and-verify", {
       method: "POST",
       body: form,
+      timeoutMs: 180_000,
     });
     if (res.error || !res.data) {
       throw new Error(res.error || "Document verification could not be started.");

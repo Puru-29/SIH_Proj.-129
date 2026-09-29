@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -332,7 +333,6 @@ def test_system_health_executes_and_persists_connector_checks(hub_client, monkey
     assert failed_health["status"] == "degraded"
     assert failed_health["last_failure"]
     assert failed_health["failure_count"] >= 1
-
     sessions = hub_client.app.state.test_sessions
     with sessions() as db:
         from app.models.integration_health_check import IntegrationHealthCheck
@@ -343,6 +343,19 @@ def test_system_health_executes_and_persists_connector_checks(hub_client, monkey
             .count()
             >= 2
         )
+
+
+def test_education_gateway_resolves_by_connector_mapping_key():
+    system = SimpleNamespace(
+        name="Education Records Gateway",
+        slug="education-records-mh",
+        department=SimpleNamespace(name="Education Department"),
+    )
+
+    connector = interoperability_service.engine.connector_for_system(system)
+
+    assert connector is not None
+    assert connector.mapping_key == "education"
 
 
 def test_notifications_are_persisted_scoped_and_linked_to_resources(hub_client):
